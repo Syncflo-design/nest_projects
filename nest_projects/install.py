@@ -87,10 +87,18 @@ CUSTOM_FIELDS = {
 			"insert_after": "job_customer_po",
 		},
 		{
+			"fieldname": "job_warehouse",
+			"label": "Site Store",
+			"fieldtype": "Link",
+			"options": "Warehouse",
+			"insert_after": "job_site",
+			"description": "The job's own store at site. Created automatically when the job gets a stage.",
+		},
+		{
 			"fieldname": "job_blocker",
 			"label": "Held Up By",
 			"fieldtype": "Small Text",
-			"insert_after": "job_site",
+			"insert_after": "job_warehouse",
 			"description": "What is stopping this job moving. Leave empty when nothing is.",
 		},
 		{

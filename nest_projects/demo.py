@@ -12,7 +12,9 @@ from frappe.model.naming import NamingSeries
 from frappe.desk.doctype.notification_settings.notification_settings import create_notification_settings
 from frappe.utils import add_days, add_to_date, get_datetime, now_datetime, today
 
+from nest_projects import stock
 from nest_projects.jobs import READY_GATE, default_company, ensure_customer
+from nest_projects.purchasing import default_warehouse
 from nest_projects.quotes import ALWAYS_READY, ORDER_FACE
 
 DOMAIN = "acme-demo.test"
@@ -52,6 +54,31 @@ REGISTER = [
 	("AT1419", "jason", "Lumpsopr Spec", "Siyandani Pipe Work", 129770.72, None),
 	("AT1420", "paul", "DASwacon", "Tender JGDM2026/27-002 Nqanqarhu Water Treatment Works Upgrade", 320139.50, None),
 ]
+
+# Items the jobs use and buy, with a buying price excl VAT. The last two are not on any
+# job's list, for showing that a PO request can add what the list missed.
+ITEMS = [
+	("ACM-LADDER-SEC", "Galvanised ladder sections", 4800), ("ACM-FIX-BRKT", "Fixing brackets", 85),
+	("ACM-BAR-SCREEN", "316 stainless bar screen", 18500), ("ACM-RAKE", "Rake and holder", 1650),
+	("ACM-BOLT-M16", "Anchor bolts M16", 45), ("ACM-GEARMOTOR", "Bridge drive gearmotor", 38500),
+	("ACM-SCRAPER", "Scraper blades", 2900), ("ACM-GRATING", "Walkway grating", 1450),
+	("ACM-HANDRAIL", "Handrail kit", 6200), ("ACM-SS-SHEET-3", "316 stainless sheet 3 mm", 5200),
+	("ACM-MOTOR-2K2", "Drive motor 2.2 kW IE3", 7800), ("ACM-GBX-R47", "Gearbox SEW R47", 14800),
+	("ACM-WEDGE-PANEL", "Wedge-wire screen panel", 9600), ("ACM-BRG-UCF210", "Bearings UCF210", 680),
+	("ACM-SS-FASTEN", "Stainless fastener kit", 1150), ("ACM-AER-KIT", "Aerator gearbox overhaul kit", 22500),
+	("ACM-SHAFT-EN19", "Rotor shaft EN19 90 mm", 16800), ("ACM-BRG-22220", "Bearing set SKF 22220", 7450),
+	("ACM-EPOXY-20L", "Epoxy paint system 20 L", 3900), ("ACM-COUP-E20", "Coupling Rex Omega E20", 5600),
+	("ACM-TELE-TUBE", "Telescopic tube 316", 24500), ("ACM-HEADSTOCK", "Headstock and spindle", 13200),
+	("ACM-HARDOX-10", "Hardox 450 wear plate 10 mm", 6900), ("ACM-GREASE-5KG", "Bearing grease 5 kg", 950),
+]
+ITEM_BY_NAME = {name: code for code, name, _rate in ITEMS}
+
+SUPPLIERS = ["Highveld Steel Supply", "Rand Bearings & Drives", "Coastal Coatings"]
+
+# Opening stock in the main store, and one job (in Production) with goods already at site, part used.
+OPENING_MARK = "Nest demo opening stock"
+AT_SITE = {347: {"sent": [("ACM-GEARMOTOR", 1), ("ACM-SCRAPER", 6), ("ACM-GRATING", 12), ("ACM-HANDRAIL", 1)],
+				 "used": [("ACM-SCRAPER", 6), ("ACM-GRATING", 8)]}}
 
 # Quotes that became the demo jobs: quote no -> (job no, rep, value incl VAT).
 WON = {
@@ -251,6 +278,10 @@ def _load(me):
 	for key, (first, last, _role) in PEOPLE.items():
 		users[key] = ensure_user(key, first, last)
 	customers = {name: ensure_customer(name) for name in {j["customer"] for j in JOBS}}
+	for code, name, rate in ITEMS:
+		ensure_item(code, name, rate)
+	for supplier in SUPPLIERS:
+		ensure_supplier(supplier)
 
 	for stage, key in STAGE_REGULARS.items():
 		if not frappe.db.get_value("Job Stage", stage, "default_owner"):
@@ -262,6 +293,7 @@ def _load(me):
 	for job in JOBS:
 		make_job(job, users, customers, company)
 	make_quotes(users, customers)
+	make_stock(company)
 
 	use_job_numbers()
 	# Anything created after this moment is test data the broom also clears.
@@ -290,6 +322,10 @@ def remove_demo():
 	if since:
 		names |= set(frappe.get_all("Project", filters=since + [["job_stage", "is", "set"]], pluck="name"))
 	names = list(names)
+	# Undo stock newest first: movements at the jobs, then purchases, then opening stock and site stores.
+	remove_job_stock(names)
+	remove_purchasing(names)
+	remove_opening_and_stores(names)
 	for name in names:
 		frappe.delete_doc("Project", name, ignore_permissions=True, force=True)
 	if names:
@@ -321,11 +357,129 @@ def remove_demo():
 		except frappe.LinkExistsError:
 			kept.append(name)
 
+	codes = [code for code, _name, _rate in ITEMS]
+	frappe.db.delete("Item Price", {"item_code": ["in", codes]})
+	for code in codes:
+		if frappe.db.exists("Item", code):
+			try:
+				frappe.delete_doc("Item", code, ignore_permissions=True)
+			except (frappe.LinkExistsError, frappe.ValidationError):
+				kept.append(code)
+	for supplier in SUPPLIERS:
+		name = frappe.db.get_value("Supplier", {"supplier_name": supplier})
+		if not name:
+			continue
+		try:
+			frappe.delete_doc("Supplier", name, ignore_permissions=True)
+		except (frappe.LinkExistsError, frappe.ValidationError):
+			kept.append(name)
+
 	# Numbering picks up where real records end, so a reload starts at JOB-356 / AT1430 again.
 	reset_series(SERIES, "Project", "JOB-")
 	reset_series(QUOTE_SERIES, "Job Quote", "AT")
 	frappe.db.set_default(LOADED_KEY, "")
 	return {"jobs": len(names), "quotes": len(quotes), "kept": kept}
+
+
+def remove_purchasing(projects):
+	"""Receipts, then purchase orders, raised for these jobs: cancelled if submitted, then deleted."""
+	if not projects:
+		return
+	pos = set(frappe.get_all("Purchase Order", filters={"project": ["in", projects]}, pluck="name"))
+	pos |= set(frappe.get_all("Purchase Order Item", filters={"project": ["in", projects]}, pluck="parent"))
+	receipts = set()
+	if pos:
+		receipts = set(frappe.get_all("Purchase Receipt Item", filters={"purchase_order": ["in", list(pos)]}, pluck="parent"))
+	for doctype, names in (("Purchase Receipt", receipts), ("Purchase Order", pos)):
+		for name in names:
+			doc = frappe.get_doc(doctype, name)
+			if doc.docstatus == 1:
+				doc.flags.ignore_permissions = True
+				doc.cancel()
+			frappe.delete_doc(doctype, name, ignore_permissions=True, force=True)
+
+
+def make_stock(company):
+	"""Opening stock in the main store, then goods at site (and some used) for the AT_SITE jobs."""
+	main = default_warehouse(company)
+	opening = frappe.new_doc("Stock Entry")
+	opening.stock_entry_type = "Material Receipt"
+	opening.company = company
+	opening.remarks = OPENING_MARK
+	for code, _name, rate in ITEMS:
+		qty = 40 if rate < 1000 else (12 if rate < 10000 else 4)
+		opening.append("items", {"item_code": code, "qty": qty, "t_warehouse": main, "basic_rate": rate})
+	opening.flags.ignore_permissions = True
+	opening.insert()
+	opening.submit()
+
+	for job_no, moves in AT_SITE.items():
+		job = frappe.get_doc("Project", f"JOB-{job_no}")
+		if not job.job_warehouse:
+			job.db_set("job_warehouse", stock.site_store(job), update_modified=False)
+		stock.move_goods(job, main, job.job_warehouse, [{"item": c, "qty": q} for c, q in moves["sent"]], _("Delivered to site"))
+		stock.use_on_site(job, [{"item": c, "qty": q} for c, q in moves["used"]], _("Fitted on site"))
+
+
+def remove_job_stock(projects):
+	"""Transfers and use recorded against these jobs, newest first."""
+	if projects:
+		cancel_and_delete(frappe.get_all("Stock Entry", filters={"project": ["in", projects]}, order_by="creation desc", pluck="name"))
+
+
+def remove_opening_and_stores(projects):
+	cancel_and_delete(frappe.get_all("Stock Entry", filters={"remarks": OPENING_MARK}, order_by="creation desc", pluck="name"))
+	stores = frappe.get_all("Project", filters={"name": ["in", projects]}, pluck="job_warehouse") if projects else []
+	for store in filter(None, stores):
+		try:
+			frappe.delete_doc("Warehouse", store, ignore_permissions=True)
+		except Exception:
+			# A store with history can't always be deleted; switched off, it is reused on the next load.
+			frappe.db.set_value("Warehouse", store, "disabled", 1)
+
+
+def cancel_and_delete(entries):
+	for name in entries:
+		doc = frappe.get_doc("Stock Entry", name)
+		if doc.docstatus == 1:
+			doc.flags.ignore_permissions = True
+			doc.cancel()
+		frappe.delete_doc("Stock Entry", name, ignore_permissions=True, force=True)
+
+
+def ensure_item(code, name, rate):
+	if not frappe.db.exists("Item", code):
+		frappe.get_doc(
+			{
+				"doctype": "Item",
+				"item_code": code,
+				"item_name": name,
+				"description": name,
+				"item_group": frappe.db.get_value("Item Group", {"name": "Raw Material", "is_group": 0})
+				or frappe.db.get_value("Item Group", {"is_group": 0}),
+				"stock_uom": "Nos" if frappe.db.exists("UOM", "Nos") else frappe.db.get_value("UOM", {}, "name"),
+				"is_stock_item": 1,
+				"is_purchase_item": 1,
+			}
+		).insert(ignore_permissions=True)
+	price_list = frappe.db.get_single_value("Buying Settings", "buying_price_list") or "Standard Buying"
+	if frappe.db.exists("Price List", price_list) and not frappe.db.exists(
+		"Item Price", {"item_code": code, "price_list": price_list}
+	):
+		frappe.get_doc(
+			{"doctype": "Item Price", "item_code": code, "price_list": price_list, "price_list_rate": rate}
+		).insert(ignore_permissions=True)
+
+
+def ensure_supplier(title):
+	if frappe.db.get_value("Supplier", {"supplier_name": title}):
+		return
+	group = frappe.db.get_single_value("Buying Settings", "supplier_group") or frappe.db.get_value(
+		"Supplier Group", {"is_group": 0}
+	)
+	frappe.get_doc(
+		{"doctype": "Supplier", "supplier_name": title, "supplier_type": "Company", "supplier_group": group}
+	).insert(ignore_permissions=True)
 
 
 def reset_series(series, doctype, prefix):
@@ -402,7 +556,7 @@ def make_job(job, users, customers, company):
 		})
 	for description, qty, status in job.get("materials", []):
 		doc.append("job_materials", {
-			"description": description, "qty": qty, "status": status,
+			"item": ITEM_BY_NAME.get(description), "description": description, "qty": qty, "status": status,
 			"expected_on": add_days(today(), 3) if status == "Ordered" else None,
 		})
 	for i, check in enumerate(job.get("qc", [])):

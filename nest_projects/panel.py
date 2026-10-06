@@ -7,7 +7,9 @@ on the form) and returns the refreshed job, so the panel redraws in one trip.
 import frappe
 from frappe import _
 
+from nest_projects import stock
 from nest_projects.jobs import CHECK_TABLES, gate_failure
+from nest_projects.purchasing import create_po_request, default_warehouse
 
 DRAWING_STATUSES = ("Draft", "Sent for Approval", "Approved", "Superseded")
 MATERIAL_STATUSES = ("In Stock", "To Order", "Ordered", "Received")
@@ -59,8 +61,41 @@ def set_material_status(project, row, status):
 	if status not in MATERIAL_STATUSES:
 		frappe.throw(_("Unknown material status {0}.").format(status))
 	doc = writable(project)
-	child(doc, "job_materials", row).status = status
+	line = child(doc, "job_materials", row)
+	if line.purchase_order:
+		frappe.throw(_("This line follows purchase order {0}.").format(line.purchase_order))
+	line.status = status
 	return save(doc)
+
+
+@frappe.whitelist()
+def raise_po_request(project, supplier, lines, schedule_date=None, warehouse=None):
+	"""Draft PO from the job: its To Order lines, plus anything added in the dialog."""
+	lines = frappe.parse_json(lines) if isinstance(lines, str) else (lines or [])
+	doc = writable(project)
+	po = create_po_request(doc, supplier, lines, schedule_date, warehouse)
+	doc.save()
+	payload = job_payload(doc)
+	payload["created_po"] = po
+	return payload
+
+
+@frappe.whitelist()
+def move_goods(project, from_warehouse, to_warehouse, lines, note=None):
+	"""Goods from any store to the job's site, or back."""
+	lines = frappe.parse_json(lines) if isinstance(lines, str) else (lines or [])
+	doc = writable(project)
+	stock.move_goods(doc, from_warehouse, to_warehouse, lines, note)
+	return job_payload(frappe.get_doc("Project", project))
+
+
+@frappe.whitelist()
+def use_on_site(project, lines, note=None):
+	"""What was used at site; costs the job."""
+	lines = frappe.parse_json(lines) if isinstance(lines, str) else (lines or [])
+	doc = writable(project)
+	stock.use_on_site(doc, lines, note)
+	return job_payload(frappe.get_doc("Project", project))
 
 
 @frappe.whitelist()
@@ -121,7 +156,12 @@ def job_payload(doc):
 		"blocker": doc.job_blocker,
 		"drawing_not_required": doc.job_drawing_not_required,
 		"drawings": rows("job_drawings", ["drawing_no", "revision", "title", "file", "status", "approved_on"]),
-		"materials": rows("job_materials", ["item", "description", "qty", "status", "expected_on"]),
+		"materials": rows("job_materials", ["item", "description", "qty", "status", "expected_on", "purchase_order"]),
+		"company": doc.company,
+		"site_store": doc.get("job_warehouse"),
+		"main_store": default_warehouse(doc.company) if doc.company else None,
+		"on_site": stock.on_site(doc),
+		"used_value": doc.get("total_consumed_material_cost") or 0,
 		"checks": rows("job_qc_checks", ["check", "done", "done_by", "done_on", "notes"]),
 		"ready_checks": rows("job_ready_checks", ["check", "done", "done_by", "done_on", "notes"]),
 		"milestones": rows("job_milestones", ["label", "percent", "due_at_stage", "invoiced", "invoice_ref"]),

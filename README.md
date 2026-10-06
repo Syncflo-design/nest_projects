@@ -64,6 +64,39 @@ Customer Ready checks (tap to tick; who and when is recorded), payment
 milestones (Mark invoiced with the Sage invoice number) and the history.
 The footer hands over or sends back, and says why when a gate blocks it.
 
+## PO requests from the job
+
+**Raise PO request** in the job panel's Materials section opens with the job's
+To Order lines. Remove what isn't being ordered now, add rows for anything not
+on the list, pick the supplier and required-by date. It creates a **draft
+Purchase Order** linked to the job (header and every line), priced from the
+buying price list. Lines added in the dialog are written onto the job's
+materials, so nobody has to keep the list up front.
+
+The job's material lines then follow the PO: **Requested** (draft), **Ordered**
+(submitted), **Received** (purchase receipt), back to **To Order** if the PO is
+cancelled or deleted. Lines on a PO can't be ticked by hand.
+
+Approval tiers are phase 2: `nest_po_management` approves any purchase order,
+whatever raised it, so it can be added without changing this app.
+
+## Stock on site
+
+Every job on the board gets its own **site store** (a warehouse named after the
+job and its site, under a "Job Sites" group), created when the job gets a stage.
+The job panel's **Stock on site** section shows what is there, with:
+
+- **Goods to site** — from any store (main store by default) to the site store,
+  a Material Transfer tagged to the job. Starts with the job's received and
+  in-stock materials.
+- **Return** — the same, from site back to a store.
+- **Used on site** — a Material Issue from the site store against the job, which
+  is what costs the job (the job's consumed material cost).
+
+PO requests carry a required **Deliver to** store (the site store by default);
+the goods receipt takes each line's warehouse from the PO. Goods in transit and
+vans are left to the van/handover app.
+
 ## Quotes (the sales register)
 
 The third view on the board replaces their Excel sales register. **Job Quote**

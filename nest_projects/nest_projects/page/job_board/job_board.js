@@ -7,7 +7,7 @@
 frappe.pages['job-board'].on_page_load = function(wrapper) {
 	var page = frappe.ui.make_app_page({ parent: wrapper, title: __('Job Board'), single_column: true });
 
-	var BUILD_MARKER = 'v0.0.11-2026-10-06-fold-icon';
+	var BUILD_MARKER = 'v0.0.13-2026-10-06-stock-on-site';
 	console.log('Job Board loaded:', BUILD_MARKER);
 
 	[
@@ -1158,7 +1158,7 @@ class JobBoard {
 // Panel markup uses data-p-* attributes so the board's own handlers ignore it.
 
 var JB_MATERIAL_NEXT = { 'To Order': 'Ordered', 'Ordered': 'Received', 'Received': 'To Order', 'In Stock': 'To Order' };
-var JB_MATERIAL_TONE = { 'To Order': 'warn', 'Ordered': '', 'Received': 'good', 'In Stock': 'good' };
+var JB_MATERIAL_TONE = { 'To Order': 'warn', 'Requested': 'warn', 'Ordered': '', 'Received': 'good', 'In Stock': 'good' };
 var JB_DRAWING_TONE = { 'Draft': '', 'Sent for Approval': 'warn', 'Approved': 'good', 'Superseded': 'bad' };
 
 function jb_next_rev(rev) {
@@ -1268,6 +1268,7 @@ class JobPanel {
 			this.render_blocker(),
 			this.render_drawings(),
 			this.render_materials(),
+			this.render_stock(),
 			this.render_checks(j.checks, 'job_qc_checks', 'check-square', __('QC / FAT Checks')),
 			this.render_checks(j.ready_checks, 'job_ready_checks', 'truck', __('Customer Ready Checks')),
 			this.render_milestones(),
@@ -1387,29 +1388,148 @@ class JobPanel {
 
 	render_materials() {
 		var j = this.job;
-		if (!j.materials.length) return '';
+		if (!j.materials.length && !j.can_write) return '';
 		var count = function(s) { return j.materials.filter(function(m) { return m.status === s; }).length; };
 		var parts = [];
 		if (count('To Order')) parts.push(jb_tag(__('{0} to order', [count('To Order')]), 'warn'));
+		if (count('Requested')) parts.push(jb_tag(__('{0} requested', [count('Requested')]), 'warn'));
 		if (count('Ordered')) parts.push(jb_tag(__('{0} on order', [count('Ordered')]), ''));
-		if (!parts.length) parts.push(jb_tag(__('All in'), 'good'));
+		if (j.materials.length && !parts.length) parts.push(jb_tag(__('All in'), 'good'));
+		var action = j.can_write
+			? '<button class="jb-p-link" data-p-action="po-request"><i class="ph ph-shopping-cart"></i> ' + __('Raise PO request') + '</button>' : '';
 		var rows = j.materials.map(function(m) {
-			var next = JB_MATERIAL_NEXT[m.status] || 'To Order';
 			var chip = jb_tag(jb_esc(__(m.status)), JB_MATERIAL_TONE[m.status] || '');
-			if (j.can_write) {
+			// Lines on a purchase order follow it; the rest are ticked off by hand.
+			if (j.can_write && !m.purchase_order) {
+				var next = JB_MATERIAL_NEXT[m.status] || 'To Order';
 				chip = '<button class="jb-p-chipbtn" data-p-action="material" data-row="' + jb_esc(m.name) + '" data-status="' + jb_esc(next) +
 					'" title="' + jb_esc(__('Tap to mark {0}', [__(next)])) + '">' + chip + '</button>';
 			}
+			var sub = [];
+			if (m.purchase_order) {
+				sub.push('<a href="' + jb_esc(frappe.utils.get_form_link('Purchase Order', m.purchase_order)) + '" target="_blank" rel="noopener">' +
+					jb_esc(m.purchase_order) + '</a>');
+			}
+			if ((m.status === 'Ordered' || m.status === 'Requested') && m.expected_on) sub.push(__('needed by {0}', [jb_esc(jb_when(m.expected_on))]));
 			return [
 				'<div class="jb-p-item">',
 				'  <span class="jb-p-qty">' + jb_esc(parseFloat(m.qty || 0)) + '&times;</span>',
 				'  <div class="jb-p-grow"><div class="jb-p-item-title">' + jb_esc(m.description || m.item || '') + '</div>' +
-					(m.status === 'Ordered' && m.expected_on ? '<div class="jb-p-item-sub">' + __('expected {0}', [jb_esc(jb_when(m.expected_on))]) + '</div>' : '') + '</div>',
+					(sub.length ? '<div class="jb-p-item-sub">' + sub.join(' &middot; ') + '</div>' : '') + '</div>',
 				'  <div class="jb-p-item-side">' + chip + '</div>',
 				'</div>'
 			].join('\n');
 		}).join('\n');
-		return this.section('package', __('Materials'), parts.join(''), '', rows);
+		var empty = '<div class="jb-p-empty">' + __('Nothing listed yet. Raise a PO request to order what the job needs; the items are added here.') + '</div>';
+		return this.section('package', __('Materials'), parts.join(''), action, rows || empty);
+	}
+
+	// What is at the job's own site store, and the three ways goods move for a job.
+	render_stock() {
+		var j = this.job;
+		if (!j.site_store) return '';
+		var money = function(v) { return typeof format_currency === 'function' ? format_currency(v, null, 0) : Math.round(v); };
+		var actions = j.can_write ? [
+			'<button class="jb-p-link" data-p-action="goods-in"><i class="ph ph-truck"></i> ' + __('Goods to site') + '</button>',
+			j.on_site.length ? '<button class="jb-p-link" data-p-action="goods-used"><i class="ph ph-wrench"></i> ' + __('Used on site') + '</button>' : '',
+			j.on_site.length ? '<button class="jb-p-link" data-p-action="goods-back"><i class="ph ph-arrow-u-up-left"></i> ' + __('Return') + '</button>' : ''
+		].join('') : '';
+		var rows = j.on_site.map(function(b) {
+			return [
+				'<div class="jb-p-item">',
+				'  <span class="jb-p-qty">' + jb_esc(parseFloat(b.qty)) + '&times;</span>',
+				'  <div class="jb-p-grow"><div class="jb-p-item-title">' + jb_esc(b.item_name) + '</div><div class="jb-p-item-sub">' + jb_esc(b.item) + '</div></div>',
+				'  <div class="jb-p-item-side"><span class="jb-p-muted">' + jb_esc(money(b.value)) + '</span></div>',
+				'</div>'
+			].join('\n');
+		}).join('\n');
+		var body = (rows || '<div class="jb-p-empty">' + __('Nothing at site yet.') + '</div>') +
+			'<div class="jb-p-item-sub jb-p-stock-foot">' + __('Site store: {0}', [jb_esc(j.site_store)]) +
+			(j.used_value ? ' &middot; ' + __('used on this job so far: {0}', [jb_esc(money(j.used_value))]) : '') + '</div>';
+		return this.section('warehouse', __('Stock on site'), '', '<span class="jb-p-actions">' + actions + '</span>', body);
+	}
+
+	// Goods to site, or back: one dialog, from any store to any store, for this job.
+	open_goods(direction) {
+		var me = this;
+		var j = this.job;
+		var to_site = direction === 'in';
+		var lines = to_site
+			? j.materials.filter(function(m) { return m.item && (m.status === 'Received' || m.status === 'In Stock'); })
+				.map(function(m) { return { item: m.item, qty: parseFloat(m.qty || 1) }; })
+			: j.on_site.map(function(b) { return { item: b.item, qty: parseFloat(b.qty) }; });
+		var store_query = function() { return { filters: { company: j.company, is_group: 0, disabled: 0 } }; };
+		var dialog = new frappe.ui.Dialog({
+			title: to_site ? __('Goods to site for {0}', [j.name]) : __('Return goods from {0}', [j.name]),
+			size: 'large',
+			fields: [
+				{ fieldname: 'from_warehouse', fieldtype: 'Link', options: 'Warehouse', label: __('From'), reqd: 1,
+				  default: to_site ? j.main_store : j.site_store, get_query: store_query },
+				{ fieldtype: 'Column Break' },
+				{ fieldname: 'to_warehouse', fieldtype: 'Link', options: 'Warehouse', label: __('To'), reqd: 1,
+				  default: to_site ? j.site_store : j.main_store, get_query: store_query },
+				{ fieldtype: 'Section Break' },
+				{
+					fieldname: 'lines', fieldtype: 'Table', label: __('Items'), in_place_edit: true, data: lines,
+					description: to_site ? __('Starts with the job\'s received and in-stock materials. Change or add rows as needed.') : '',
+					fields: [
+						{ fieldname: 'item', fieldtype: 'Link', options: 'Item', label: __('Item'), in_list_view: 1, columns: 7, reqd: 1 },
+						{ fieldname: 'qty', fieldtype: 'Float', label: __('Qty'), in_list_view: 1, columns: 3, reqd: 1, default: 1 }
+					]
+				},
+				{ fieldname: 'note', fieldtype: 'Data', label: __('Note (optional)') }
+			],
+			primary_action_label: to_site ? __('Send to Site') : __('Return Goods'),
+			primary_action: function(v) {
+				dialog.hide();
+				me.stock_call('move_goods', { from_warehouse: v.from_warehouse, to_warehouse: v.to_warehouse, lines: v.lines || [], note: v.note },
+					to_site ? __('Goods sent to site') : __('Goods returned'));
+			}
+		});
+		dialog.show();
+	}
+
+	open_used() {
+		var me = this;
+		var j = this.job;
+		var dialog = new frappe.ui.Dialog({
+			title: __('Used on site for {0}', [j.name]),
+			size: 'large',
+			fields: [
+				{
+					fieldname: 'lines', fieldtype: 'Table', label: __('Used'), in_place_edit: true,
+					data: j.on_site.map(function(b) { return { item: b.item, on_site: parseFloat(b.qty), qty: 0 }; }),
+					description: __('Enter what was used. Lines left at 0 stay on site. Used goods are costed to the job.'),
+					fields: [
+						{ fieldname: 'item', fieldtype: 'Link', options: 'Item', label: __('Item'), in_list_view: 1, columns: 5, reqd: 1 },
+						{ fieldname: 'on_site', fieldtype: 'Float', label: __('On site'), in_list_view: 1, columns: 2, read_only: 1 },
+						{ fieldname: 'qty', fieldtype: 'Float', label: __('Used'), in_list_view: 1, columns: 3 }
+					]
+				},
+				{ fieldname: 'note', fieldtype: 'Data', label: __('Note (optional)') }
+			],
+			primary_action_label: __('Record Use'),
+			primary_action: function(v) {
+				dialog.hide();
+				me.stock_call('use_on_site', { lines: v.lines || [], note: v.note }, __('Use recorded'));
+			}
+		});
+		dialog.show();
+	}
+
+	stock_call(method, args, done) {
+		var me = this;
+		var name = this.name;
+		frappe.call({
+			method: 'nest_projects.panel.' + method,
+			args: Object.assign({ project: name }, args),
+			freeze: true,
+			freeze_message: __('Posting the stock movement...'),
+			callback: function(r) {
+				frappe.show_alert({ message: done, indicator: 'green' });
+				if (me.name === name && r.message) me.show(r.message);
+			}
+		});
 	}
 
 	// A tick-list: QC / FAT checks, or the Customer Ready checks from the Order Face.
@@ -1496,6 +1616,71 @@ class JobPanel {
 
 	// ---- Actions ----------------------------------------------------------
 
+	// A PO request starts from the job's To Order lines; anything else is added as a row
+	// and lands on the job's materials too, so nobody has to keep the list up front.
+	raise_po_request() {
+		var me = this;
+		var j = this.job;
+		var lines = j.materials.filter(function(m) { return m.status === 'To Order' && !m.purchase_order; }).map(function(m) {
+			return { row: m.name, item: m.item || '', description: m.description || '', qty: parseFloat(m.qty || 1) };
+		});
+		var dialog = new frappe.ui.Dialog({
+			title: __('PO request for {0}', [j.name]),
+			size: 'large',
+			fields: [
+				{ fieldname: 'supplier', fieldtype: 'Link', options: 'Supplier', label: __('Supplier'), reqd: 1 },
+				{ fieldtype: 'Column Break' },
+				{ fieldname: 'schedule_date', fieldtype: 'Date', label: __('Required by'), reqd: 1,
+				  default: moment(this.board.data.today).add(14, 'days').format('YYYY-MM-DD') },
+				{ fieldname: 'warehouse', fieldtype: 'Link', options: 'Warehouse', label: __('Deliver to'), reqd: 1,
+				  default: j.site_store || j.main_store || '',
+				  description: __('Where the goods will be received. The job\'s site store unless they go elsewhere.'),
+				  get_query: function() { return { filters: { company: j.company, is_group: 0, disabled: 0 } }; } },
+				{ fieldtype: 'Section Break' },
+				{
+					fieldname: 'lines', fieldtype: 'Table', label: __('Items'), in_place_edit: true, data: lines,
+					description: lines.length
+						? __('These are the job\'s To Order lines. Remove any you are not ordering now, and add a row for anything else.')
+						: __('Add a row for each item. They are added to the job\'s materials.'),
+					fields: [
+						{ fieldname: 'item', fieldtype: 'Link', options: 'Item', label: __('Item'), in_list_view: 1, columns: 4, reqd: 1 },
+						{ fieldname: 'description', fieldtype: 'Data', label: __('Description'), in_list_view: 1, columns: 4 },
+						{ fieldname: 'qty', fieldtype: 'Float', label: __('Qty'), in_list_view: 1, columns: 2, reqd: 1, default: 1 },
+						{ fieldname: 'row', fieldtype: 'Data', hidden: 1 }
+					]
+				}
+			],
+			primary_action_label: __('Create PO Request'),
+			primary_action: function(v) {
+				var picked = (v.lines || []).filter(function(l) { return l.item && parseFloat(l.qty) > 0; });
+				if (!picked.length) {
+					frappe.msgprint(__('Add at least one item with a quantity.'));
+					return;
+				}
+				dialog.hide();
+				frappe.call({
+					method: 'nest_projects.panel.raise_po_request',
+					args: { project: j.name, supplier: v.supplier, schedule_date: v.schedule_date, warehouse: v.warehouse, lines: picked },
+					freeze: true,
+					freeze_message: __('Creating the PO request...'),
+					callback: function(r) {
+						if (!r.message) return;
+						var po = r.message.created_po;
+						frappe.show_alert({
+							message: __('PO request {0} created for {1}', [
+								'<a href="' + frappe.utils.get_form_link('Purchase Order', po) + '" target="_blank" rel="noopener">' + jb_esc(po) + '</a>', jb_esc(j.name)
+							]),
+							indicator: 'green'
+						}, 8);
+						if (me.name === j.name) me.show(r.message);
+						me.board.refresh();
+					}
+				});
+			}
+		});
+		dialog.show();
+	}
+
 	add_drawing() {
 		var me = this;
 		var live = this.job.drawings.filter(function(d) { return d.status !== 'Superseded'; });
@@ -1580,6 +1765,14 @@ class JobPanel {
 				me.act('set_blocker', { text: '' });
 			} else if (action === 'drawing-status') {
 				me.act('set_drawing_status', { row: row, status: $b.attr('data-status') });
+			} else if (action === 'goods-in') {
+				me.open_goods('in');
+			} else if (action === 'goods-back') {
+				me.open_goods('back');
+			} else if (action === 'goods-used') {
+				me.open_used();
+			} else if (action === 'po-request') {
+				me.raise_po_request();
 			} else if (action === 'drawing-add') {
 				me.add_drawing();
 			} else if (action === 'material') {

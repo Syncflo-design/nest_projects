@@ -368,6 +368,8 @@
 .jb-p-sec-head > .ph { color: var(--jb-stage, var(--jb-primary)); font-size: 17px; }
 .jb-p-sum { display: inline-flex; gap: 4px; font-weight: 500; }
 .jb-p-empty { color: var(--jb-light); font-size: 12.5px; padding: 6px 0 8px; }
+.jb-p-actions { display: inline-flex; flex-wrap: wrap; gap: 2px 6px; justify-content: flex-end; }
+.jb-p-stock-foot { padding: 6px 0 8px; border-top: 1px solid var(--jb-subtle); }
 
 .jb-p-item {
   display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--jb-subtle);

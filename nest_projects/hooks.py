@@ -29,6 +29,17 @@ nest_demo_loaders = [
 doc_events = {
 	"Project": {
 		"validate": "nest_projects.jobs.validate_project",
-		"on_update": "nest_projects.jobs.notify_owner",
-	}
+		# Alert the new person; give a job on the board its own site store.
+		"on_update": ["nest_projects.jobs.notify_owner", "nest_projects.stock.ensure_job_store"],
+	},
+	# The job's material lines follow the purchase order raised for them.
+	"Purchase Order": {
+		"on_submit": "nest_projects.purchasing.po_submitted",
+		"on_cancel": "nest_projects.purchasing.po_released",
+		"on_trash": "nest_projects.purchasing.po_released",
+	},
+	"Purchase Receipt": {
+		"on_submit": "nest_projects.purchasing.receipt_submitted",
+		"on_cancel": "nest_projects.purchasing.receipt_cancelled",
+	},
 }

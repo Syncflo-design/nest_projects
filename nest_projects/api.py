@@ -168,7 +168,7 @@ def attach_summaries(jobs, stages):
 		job.materials = {
 			"total": len(mats),
 			"to_order": sum(1 for m in mats if m.status == "To Order"),
-			"on_order": sum(1 for m in mats if m.status == "Ordered"),
+			"on_order": sum(1 for m in mats if m.status in ("Requested", "Ordered")),
 		}
 
 		qc = checks.get(job.name, [])

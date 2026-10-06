@@ -150,8 +150,9 @@ def attach_summaries(jobs, stages):
 	milestones = child_rows("Job Milestone", names, ["label", "percent", "due_at_stage", "invoiced"])
 
 	for job in jobs:
+		# The card shows the main drawing: the first one still live (older revisions are superseded).
 		live = [d for d in drawings.get(job.name, []) if d.status != "Superseded"]
-		latest = live[-1] if live else None
+		latest = live[0] if live else None
 		job.drawing = (
 			{
 				"no": latest.drawing_no,

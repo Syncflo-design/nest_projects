@@ -7,7 +7,7 @@
 frappe.pages['job-board'].on_page_load = function(wrapper) {
 	var page = frappe.ui.make_app_page({ parent: wrapper, title: __('Job Board'), single_column: true });
 
-	var BUILD_MARKER = 'v0.0.6-2026-10-06-quotes';
+	var BUILD_MARKER = 'v0.0.9-2026-10-06-fit-to-screen';
 	console.log('Job Board loaded:', BUILD_MARKER);
 
 	[
@@ -26,7 +26,11 @@ frappe.pages['job-board'].on_page_load = function(wrapper) {
 };
 
 frappe.pages['job-board'].on_page_show = function(wrapper) {
-	if (wrapper.jobBoard) wrapper.jobBoard.refresh();
+	if (!wrapper.jobBoard) return;
+	// job-board/quotes (an in-app route, used by Nest Home tiles) opens that view.
+	var asked = (frappe.get_route() || [])[1];
+	if (asked === 'stage' || asked === 'person' || asked === 'quotes') wrapper.jobBoard.view = asked;
+	wrapper.jobBoard.refresh();
 };
 
 // ---------------------------------------------------------------------------
@@ -50,6 +54,10 @@ var JB_FILTERS = [
 ];
 var JB_SOON_DAYS = 7;
 var JB_VIEW_KEY = 'nest-projects-board-view';
+var JB_HIDDEN_KEY = 'nest-projects-hidden-stages';
+var JB_HIDDEN_PEOPLE_KEY = 'nest-projects-hidden-people';
+var JB_NOBODY = '__none';
+var JB_PHONE = '(max-width: 767px)';
 
 function jb_esc(s) {
 	var map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
@@ -80,12 +88,22 @@ class JobBoard {
 		this.view = 'stage';
 		this.qfilter = 'open';
 		this.qdata = null;
+		// Stages the user chose to hide (remembered per browser), and columns opened or
+		// shut by hand this session (empty and finished columns collapse by themselves).
+		this.hidden = new Set();
+		this.hidden_people = new Set();
+		this.opened = new Set();
+		this.shut = new Set();
+		try {
+			this.hidden = new Set(JSON.parse(localStorage.getItem(JB_HIDDEN_KEY) || '[]'));
+			this.hidden_people = new Set(JSON.parse(localStorage.getItem(JB_HIDDEN_PEOPLE_KEY) || '[]'));
+		} catch (e) { /* storage blocked */ }
 		try {
 			var saved = localStorage.getItem(JB_VIEW_KEY);
 			if (saved === 'person' || saved === 'quotes') this.view = saved;
 		} catch (e) { /* storage blocked */ }
-		// A link can open a given view: /desk/job-board?view=quotes (Nest Home tiles use this).
-		var asked = new URLSearchParams(window.location.search).get('view');
+		// A link can open a given view: job-board/quotes, or /desk/job-board?view=quotes.
+		var asked = (frappe.get_route() || [])[1] || new URLSearchParams(window.location.search).get('view');
 		if (asked === 'stage' || asked === 'person' || asked === 'quotes') this.view = asked;
 
 		// v16: page.body is jQuery; create our own container (gotcha 2026-05-10, Variant 2).
@@ -173,7 +191,14 @@ class JobBoard {
 		return a.name < b.name ? -1 : (a.name > b.name ? 1 : 0);
 	}
 
+	// The picker for the current view: stages on By Stage, people on By Person.
+	in_view(j) {
+		if (this.view === 'person') return !this.hidden_people.has(j.job_owner || JB_NOBODY);
+		return !this.hidden.has(j.job_stage);
+	}
+
 	matches(j) {
+		if (!this.in_view(j)) return false;
 		if (this.query && j.search.indexOf(this.query) === -1) return false;
 		if (this.filter === 'all') return true;
 		return !!j[this.filter];
@@ -199,6 +224,11 @@ class JobBoard {
 			'      <button class="jb-view" data-view="person" role="tab"><i class="ph ph-users-three"></i><span>' + __('By Person') + '</span></button>',
 			'      <button class="jb-view" data-view="quotes" role="tab"><i class="ph ph-clipboard-text"></i><span>' + __('Quotes') + '</span></button>',
 			'    </div>',
+			'    <div class="jb-stagepick-wrap" id="jb-stagepick-wrap">',
+			'      <button class="jb-pillbtn" id="jb-stagepick" title="' + __('Choose which stages to show') + '"><i class="ph ph-funnel-simple"></i>' +
+				'<span>' + __('Stages') + '</span><b id="jb-stagecount"></b></button>',
+			'      <div class="jb-stagemenu" id="jb-stagemenu"></div>',
+			'    </div>',
 			'    <span class="jb-filter-note" id="jb-filter-note"></span>',
 			'    <button class="btn btn-primary btn-sm jb-newquote" style="display:none"><i class="ph ph-plus"></i> ' + __('New Quote') + '</button>',
 			'    <button class="jb-iconbtn" id="jb-demo-remove" title="' + __('Remove demo jobs') + '" style="display:none"><i class="ph ph-broom"></i></button>',
@@ -219,6 +249,13 @@ class JobBoard {
 			$(this).toggleClass('active', $(this).attr('data-view') === me.view);
 		});
 		$('.jb-newquote', this.$main).toggle(quotes && !!(this.qdata && this.qdata.can_create));
+		$('#jb-stagepick-wrap', this.$main).toggle(!quotes);
+		var items = d.stages ? this.picker_items() : [];
+		var shown = items.filter(function(i) { return !i.hidden; }).length;
+		$('#jb-stagepick span', this.$main).text(this.view === 'person' ? __('People') : __('Stages'));
+		$('#jb-stagepick', this.$main).attr('title', this.view === 'person' ? __('Choose which people to show') : __('Choose which stages to show'));
+		$('#jb-stagecount', this.$main).text(items.length && shown < items.length ? shown + '/' + items.length : '');
+		$('#jb-stagepick', this.$main).toggleClass('active', !!items.length && shown < items.length);
 		$('#jb-demo-remove', this.$main).toggle(!!(d.can_remove_demo && d.has_demo));
 		// The first visible right-hand button pushes the group to the right edge.
 		var $right = $('.jb-newquote, #jb-demo-remove, #jb-refresh', this.$main).removeClass('jb-push');
@@ -236,10 +273,19 @@ class JobBoard {
 		}
 		if (!d) return;
 
-		var active = d.jobs.filter(function(j) { return !j.closed; });
+		// Everything below counts only what the picker shows (stages, or people on By Person).
 		var by_person = this.view === 'person';
+		var stages = by_person ? d.stages : d.stages.filter(function(s) { return !me.hidden.has(s.name); });
+		var inview = d.jobs.filter(function(j) { return me.in_view(j); });
+		var active = inview.filter(function(j) { return !j.closed; });
+		var people = by_person ? this.picker_items() : [];
+		var people_shown = people.filter(function(p) { return !p.hidden; }).length;
+		var summary;
+		if (by_person && people_shown < people.length) summary = __('{0} jobs for {1} of {2} people.', [active.length, people_shown, people.length]);
+		else if (!by_person && stages.length < d.stages.length) summary = __('{0} jobs in {1} of {2} stages.', [active.length, stages.length, d.stages.length]);
+		else summary = __('{0} jobs across {1} stages.', [active.length, d.stages.length]);
 		$('#jb-sub', this.$main).html(
-			jb_esc(__('{0} jobs across {1} stages.', [active.length, d.stages.length])) + ' ' +
+			jb_esc(summary) + ' ' +
 			'<span class="jb-hint-desk">' + (by_person ? __('Drag a card to another person to reassign it.') : __('Drag a card to hand it over.')) + '</span>' +
 			'<span class="jb-hint-phone">' + __('Tap the arrow on a card to hand it over.') + '</span>'
 		);
@@ -247,7 +293,7 @@ class JobBoard {
 		// Stat tiles: the counts are the filters.
 		var counts = {};
 		JB_FILTERS.forEach(function(f) {
-			counts[f.key] = f.key === 'all' ? active.length : d.jobs.filter(function(j) { return j[f.key]; }).length;
+			counts[f.key] = f.key === 'all' ? active.length : inview.filter(function(j) { return j[f.key]; }).length;
 		});
 		$('#jb-stats', this.$main).html(JB_FILTERS.map(function(f) {
 			return [
@@ -275,14 +321,100 @@ class JobBoard {
 		var by_stage = {};
 		visible.forEach(function(j) { (by_stage[j.job_stage] = by_stage[j.job_stage] || []).push(j); });
 
-		$('#jb-stagebar', this.$main).html(d.stages.map(function(s) {
+		$('#jb-stagebar', this.$main).html(stages.map(function(s) {
 			return '<span class="jb-chip-stage" data-goto="' + jb_esc(s.name) + '" style="--jb-stage:' + s.hex + '">' +
 				'<span class="jb-dot"></span>' + jb_esc(s.name) + ' <b>' + (by_stage[s.name] || []).length + '</b></span>';
 		}).join(''));
 
-		$('#jb-board', this.$main).html(d.stages.map(function(s) {
+		if (!stages.length) {
+			$('#jb-board', this.$main).html('<div class="jb-welcome"><div class="jb-welcome-title">' + __('No stages selected') + '</div>' +
+				'<button class="btn btn-default" data-stages="all">' + __('Show all stages') + '</button></div>');
+			return;
+		}
+		$('#jb-board', this.$main).html(stages.map(function(s) {
 			return me.render_column(s, by_stage[s.name] || []);
 		}).join('\n'));
+		this.scroll_to_match();
+	}
+
+	// Empty and finished columns fold to a slim strip on wider screens, unless opened by hand.
+	is_collapsed(stage, count) {
+		if (window.matchMedia(JB_PHONE).matches) return false;
+		if (this.opened.has(stage.name)) return false;
+		if (this.shut.has(stage.name)) return true;
+		return !!stage.is_closed || !count;
+	}
+
+	// What the picker lists: every stage, or every person with work (plus stage regulars and Unassigned).
+	picker_items() {
+		var me = this;
+		var d = this.data;
+		if (this.view === 'person') {
+			var counts = {};
+			d.jobs.forEach(function(j) {
+				if (j.closed) return;
+				var key = j.job_owner || JB_NOBODY;
+				counts[key] = (counts[key] || 0) + 1;
+			});
+			d.stages.forEach(function(s) {
+				if (s.default_owner && !s.is_closed && !(s.default_owner in counts)) counts[s.default_owner] = 0;
+			});
+			var name_of = function(k) { return k === JB_NOBODY ? __('Unassigned') : ((d.users[k] || {}).full_name || k); };
+			return Object.keys(counts).sort(function(a, b) {
+				if (a === JB_NOBODY) return 1;
+				if (b === JB_NOBODY) return -1;
+				return name_of(a).toLowerCase() < name_of(b).toLowerCase() ? -1 : 1;
+			}).map(function(k) {
+				return { key: k, label: name_of(k), count: counts[k], hex: k === JB_NOBODY ? '#94a3b8' : jb_hash_color(k), hidden: me.hidden_people.has(k) };
+			});
+		}
+		var stage_counts = {};
+		d.jobs.forEach(function(j) { stage_counts[j.job_stage] = (stage_counts[j.job_stage] || 0) + 1; });
+		return d.stages.map(function(s) {
+			return { key: s.name, label: s.name, count: stage_counts[s.name] || 0, hex: s.hex, hidden: me.hidden.has(s.name) };
+		});
+	}
+
+	render_stage_menu() {
+		var person = this.view === 'person';
+		$('#jb-stagemenu', this.$main).html([
+			'<div class="jb-stagemenu-title">' + (person ? __('Show these people') : __('Show these stages')) + '</div>',
+			this.picker_items().map(function(i) {
+				return '<label class="jb-stagemenu-row" style="--jb-stage:' + i.hex + '">' +
+					'<input type="checkbox" data-pick-toggle="' + jb_esc(i.key) + '"' + (i.hidden ? '' : ' checked') + '>' +
+					'<span class="jb-dot"></span><span class="jb-p-grow">' + jb_esc(i.label) + '</span><b>' + i.count + '</b></label>';
+			}).join(''),
+			'<div class="jb-stagemenu-foot">',
+			person
+				? '  <button class="btn btn-xs btn-default" data-people="all">' + __('Everyone') + '</button>'
+				: '  <button class="btn btn-xs btn-default" data-stages="all">' + __('All stages') + '</button>' +
+					'  <button class="btn btn-xs btn-default" data-stages="unfinished">' + __('Hide finished') + '</button>',
+			'</div>'
+		].join(''));
+	}
+
+	// kind: 'stage' or 'person'. Remembered per browser.
+	set_hidden(kind, names) {
+		var person = kind === 'person';
+		if (person) this.hidden_people = new Set(names);
+		else this.hidden = new Set(names);
+		try {
+			localStorage.setItem(person ? JB_HIDDEN_PEOPLE_KEY : JB_HIDDEN_KEY, JSON.stringify(names));
+		} catch (e) { /* storage blocked */ }
+		this.render();
+		if ($('#jb-stagemenu', this.$main).hasClass('open')) this.render_stage_menu();
+	}
+
+	// With a filter or search on, bring the first matching card into view.
+	scroll_to_match() {
+		// Only when the filter or search changes, not on every background refresh.
+		var key = [this.view, this.filter, this.query].join('|');
+		if (key === this.scrolled_for) return;
+		this.scrolled_for = key;
+		if (this.filter === 'all' && !this.query) return;
+		var board = this.$main.find('#jb-board')[0];
+		var $col = this.$main.find('.jb-card').first().closest('.jb-col');
+		if (board && $col.length) board.scrollLeft = Math.max(0, $col[0].offsetLeft - board.offsetLeft - 8);
 	}
 
 	// Nothing on the board yet: say how jobs get here, and offer the demo to a System Manager.
@@ -345,6 +477,17 @@ class JobBoard {
 			}).slice(0, 6);
 			more = jobs.length - shown.length;
 		}
+		if (this.is_collapsed(stage, jobs.length)) {
+			// The strip is still a drop target, so a card can be handed over to a folded stage.
+			return [
+				'<div class="jb-col jb-col-collapsed" data-col="' + jb_esc(stage.name) + '" style="--jb-stage:' + stage.hex + '">',
+				'  <div class="jb-col-body jb-strip" data-stage="' + jb_esc(stage.name) + '" data-expand="' + jb_esc(stage.name) + '" title="' +
+					jb_esc(__('Show {0}', [stage.name])) + '">',
+				'    <span class="jb-count">' + jobs.length + '</span><span class="jb-vname">' + jb_esc(stage.name) + '</span>',
+				'  </div>',
+				'</div>'
+			].join('\n');
+		}
 		var gate = stage.gate ? '<i class="ph ph-lock-simple jb-gate" title="' + jb_esc(JB_GATE_TEXT[stage.gate] || stage.gate) + '"></i>' : '';
 		var body = shown.length ? shown.map(function(j) { return me.render_card(j, stage); }).join('\n')
 			: '<div class="jb-empty">' + __('Nothing here') + '</div>';
@@ -353,7 +496,8 @@ class JobBoard {
 		return [
 			'<div class="jb-col' + (stage.is_closed ? ' jb-closed' : '') + '" data-col="' + jb_esc(stage.name) + '" style="--jb-stage:' + stage.hex + '">',
 			'  <div class="jb-col-head"><span class="jb-dot"></span><span class="jb-col-name">' + jb_esc(stage.name) + '</span>' + gate +
-			'<span class="jb-count">' + jobs.length + '</span></div>',
+			'<span class="jb-count">' + jobs.length + '</span>' +
+			'<button class="jb-collapse" data-collapse="' + jb_esc(stage.name) + '" title="' + __('Fold this column') + '"><i class="ph ph-caret-line-left"></i></button></div>',
 			'  <div class="jb-col-body" data-stage="' + jb_esc(stage.name) + '">' + body + '</div>',
 			'</div>'
 		].join('\n');
@@ -367,7 +511,8 @@ class JobBoard {
 		var due = '';
 		if (j.expected_end_date) {
 			var cls = j.over ? ' jb-over' : (j.soon ? ' jb-soon' : '');
-			var tip = j.over ? __('{0} days overdue', [-j.days_left]) : (j.days_left === 0 ? __('Due today') : __('Due in {0} days', [j.days_left]));
+			var tip = j.over ? (j.days_left === -1 ? __('1 day overdue') : __('{0} days overdue', [-j.days_left]))
+				: (j.days_left === 0 ? __('Due today') : (j.days_left === 1 ? __('Due tomorrow') : __('Due in {0} days', [j.days_left])));
 			due = '<span class="jb-due' + cls + '" title="' + jb_esc(tip) + '"><i class="ph ph-calendar-blank"></i>' +
 				jb_esc(moment(j.expected_end_date).format('D MMM')) + '</span>';
 		}
@@ -463,7 +608,7 @@ class JobBoard {
 		// With nothing filtered, show the stage regulars even when idle: a free engineer is worth seeing.
 		if (this.filter === 'all' && !this.query) {
 			d.stages.forEach(function(s) {
-				if (s.default_owner && !s.is_closed && !people[s.default_owner]) people[s.default_owner] = [];
+				if (s.default_owner && !s.is_closed && !people[s.default_owner] && !me.hidden_people.has(s.default_owner)) people[s.default_owner] = [];
 			});
 		}
 		var name_of = function(u) { return ((d.users[u] || {}).full_name || u).toLowerCase(); };
@@ -476,8 +621,12 @@ class JobBoard {
 				'<span class="jb-dot"></span>' + jb_esc(label) + ' <b>' + people[u].length + '</b></span>';
 		}).join(''));
 
-		$('#jb-board', this.$main).html(keys.length ? keys.map(function(u) { return me.render_person(u, people[u]); }).join('\n')
-			: '<div class="jb-empty">' + __('No jobs match.') + '</div>');
+		var nobody = this.hidden_people.size && !keys.length
+			? '<div class="jb-welcome"><div class="jb-welcome-title">' + __('No people selected') + '</div>' +
+				'<button class="btn btn-default" data-people="all">' + __('Show everyone') + '</button></div>'
+			: '<div class="jb-empty">' + __('No jobs match.') + '</div>';
+		$('#jb-board', this.$main).html(keys.length ? keys.map(function(u) { return me.render_person(u, people[u]); }).join('\n') : nobody);
+		this.scroll_to_match();
 	}
 
 	render_person(user, jobs) {
@@ -852,6 +1001,49 @@ class JobBoard {
 			if (me.view === 'quotes') me.refresh();
 		});
 
+		// Stage picker: tick the stages to show.
+		$m.on('click', '#jb-stagepick', function(e) {
+			e.stopPropagation();
+			var $menu = $m.find('#jb-stagemenu');
+			if (!$menu.hasClass('open')) me.render_stage_menu();
+			$menu.toggleClass('open');
+		});
+		$m.on('click', '#jb-stagemenu', function(e) { e.stopPropagation(); });
+		$(document).on('click.jbstagemenu', function() { $m.find('#jb-stagemenu').removeClass('open'); });
+		$m.on('change', '[data-pick-toggle]', function() {
+			var hidden = [];
+			$m.find('[data-pick-toggle]').each(function() {
+				if (!this.checked) hidden.push($(this).attr('data-pick-toggle'));
+			});
+			me.set_hidden(me.view === 'person' ? 'person' : 'stage', hidden);
+		});
+		$m.on('click', '[data-stages]', function() {
+			var which = $(this).attr('data-stages');
+			me.set_hidden('stage', which === 'unfinished'
+				? me.data.stages.filter(function(s) { return s.is_closed; }).map(function(s) { return s.name; })
+				: []);
+		});
+		$m.on('click', '[data-people]', function() { me.set_hidden('person', []); });
+
+		// Fold and unfold columns by hand.
+		$m.on('click', '[data-expand]', function() {
+			var name = $(this).attr('data-expand');
+			me.opened.add(name);
+			me.shut.delete(name);
+			me.render();
+		});
+		$m.on('click', '[data-collapse]', function(e) {
+			e.stopPropagation();
+			var name = $(this).attr('data-collapse');
+			me.shut.add(name);
+			me.opened.delete(name);
+			me.render();
+		});
+		// Folding depends on screen width (phones never fold).
+		$(window).on('resize.jobboard', frappe.utils.debounce(function() {
+			if (me.$main.is(':visible')) me.render();
+		}, 250));
+
 		// Quotes view.
 		$m.on('click', '[data-qfilter]', function() {
 			me.qfilter = $(this).attr('data-qfilter');
@@ -1070,7 +1262,8 @@ class JobPanel {
 		if (j.due) {
 			var days = moment(j.due).diff(moment(this.board.data.today), 'days');
 			var cls = days < 0 ? 'jb-over' : (days <= JB_SOON_DAYS ? 'jb-soon' : '');
-			var rel = days < 0 ? __('{0} days overdue', [-days]) : (days === 0 ? __('today') : __('in {0} days', [days]));
+			var rel = days < 0 ? (days === -1 ? __('1 day overdue') : __('{0} days overdue', [-days]))
+				: (days === 0 ? __('today') : (days === 1 ? __('tomorrow') : __('in {0} days', [days])));
 			due = '<span class="jb-due ' + cls + '">' + jb_esc(moment(j.due).format('D MMM YYYY')) + '</span> <span class="jb-p-muted">' + rel + '</span>';
 		}
 		var owner = j.owner

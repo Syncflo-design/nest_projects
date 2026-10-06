@@ -97,13 +97,41 @@
 
 /* ---- Board + columns ----------------------------------------------------- */
 .jb-board {
-  display: flex; gap: 12px; align-items: flex-start;
+  display: flex; gap: 10px; align-items: flex-start;
   overflow-x: auto; padding-bottom: 10px; scroll-behavior: smooth;
 }
+/* Fit to screen: columns share the width; below the minimum the board scrolls. */
 .jb-col {
-  flex: 0 0 286px; background: var(--jb-subtle); border-radius: var(--jb-radius);
+  flex: 1 1 0; min-width: 168px; max-width: 420px; container-type: inline-size;
+  background: var(--jb-subtle); border-radius: var(--jb-radius);
   border: 1px solid var(--jb-border); display: flex; flex-direction: column; max-height: calc(100vh - 250px);
 }
+
+/* A folded column: a slim strip with the count and the stage name, still a drop target. */
+.jb-col.jb-col-collapsed { flex: 0 0 46px; min-width: 46px; max-width: 46px; }
+.jb-strip {
+  display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 10px 0 14px;
+  min-height: 240px; cursor: pointer; border-top: 3px solid var(--jb-stage);
+  border-radius: var(--jb-radius); overflow: hidden;
+}
+.jb-strip:hover { background: color-mix(in srgb, var(--jb-stage) 10%, transparent); }
+.jb-strip .jb-count { min-width: 26px; padding: 0 6px; }
+.jb-vname {
+  writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap;
+  font-size: 12.5px; font-weight: 700; color: var(--jb-text); letter-spacing: .2px;
+}
+/* Fold button: floats over the header's right edge on hover, so the name keeps the space. */
+.jb-col-head { position: relative; }
+.jb-collapse {
+  position: absolute; top: 8px; right: 8px; background: var(--jb-subtle);
+  width: 24px; height: 24px; border: 0; border-radius: 6px; padding: 0;
+  color: var(--jb-light); cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 14px; opacity: 0; transition: opacity .12s ease;
+}
+.jb-col:hover .jb-collapse { opacity: 1; }
+.jb-collapse:hover { background: var(--jb-card); color: var(--jb-text); }
+
+
 .jb-col-head {
   display: flex; align-items: center; gap: 8px; padding: 11px 12px 9px;
   font-weight: 700; font-size: 13.5px; border-top: 3px solid var(--jb-stage); border-radius: var(--jb-radius) var(--jb-radius) 0 0;
@@ -118,7 +146,35 @@
 }
 .jb-col-body { padding: 4px 8px 10px; overflow-y: auto; flex: 1; min-height: 80px; border-radius: 0 0 var(--jb-radius) var(--jb-radius); }
 .jb-col-body.jb-drop { background: color-mix(in srgb, var(--jb-stage) 12%, transparent); outline: 2px dashed var(--jb-stage); outline-offset: -4px; }
-.jb-col.jb-closed { flex-basis: 240px; opacity: .92; }
+.jb-col.jb-closed { opacity: .92; }
+
+/* Stage picker */
+.jb-stagepick-wrap { position: relative; flex-shrink: 0; }
+.jb-pillbtn {
+  height: 38px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--jb-border);
+  background: var(--jb-card); color: var(--jb-muted); font-size: 13px; font-weight: 600; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+}
+.jb-pillbtn .ph { font-size: 16px; }
+.jb-pillbtn:hover { color: var(--jb-text); border-color: var(--jb-primary); }
+.jb-pillbtn.active { color: var(--jb-primary); border-color: var(--jb-primary); }
+.jb-pillbtn b { font-size: 11.5px; padding: 1px 7px; border-radius: 999px; background: var(--jb-primary); color: #fff; }
+.jb-pillbtn b:empty { display: none; }
+.jb-stagemenu {
+  display: none; position: absolute; top: 44px; left: 0; z-index: 30; width: 260px; padding: 8px;
+  background: var(--jb-card); border: 1px solid var(--jb-border); border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, .16);
+}
+.jb-stagemenu.open { display: block; }
+.jb-stagemenu-title { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px; color: var(--jb-light); padding: 4px 8px 6px; }
+.jb-stagemenu-row {
+  display: flex; align-items: center; gap: 9px; padding: 7px 8px; margin: 0; border-radius: 8px;
+  font-size: 13px; font-weight: 600; color: var(--jb-text); cursor: pointer;
+}
+.jb-stagemenu-row:hover { background: var(--jb-subtle); }
+.jb-stagemenu-row input { margin: 0; accent-color: var(--jb-primary); width: 15px; height: 15px; }
+.jb-stagemenu-row b { font-size: 11.5px; color: var(--jb-muted); }
+.jb-stagemenu-foot { display: flex; gap: 6px; padding: 8px 8px 2px; border-top: 1px solid var(--jb-subtle); margin-top: 4px; }
 .jb-empty { text-align: center; color: var(--jb-light); font-size: 12.5px; padding: 18px 6px; }
 
 /* ---- Cards --------------------------------------------------------------- */
@@ -219,7 +275,8 @@
   .jb-stat-n { font-size: 18px; }
   .jb-toolbar { flex-wrap: wrap; }
   .jb-search { max-width: none; flex: 1 1 100%; order: 0; }
-  .jb-views { order: 1; flex: 1; }
+  .jb-views { order: 1; flex: 1 1 100%; }
+  .jb-stagepick-wrap { order: 2; }
   .jb-view { flex: 1; justify-content: center; padding: 0 8px; }
   .jb-toolbar .jb-iconbtn { order: 2; }
   .jb-newquote { order: 3; flex: 1 1 100%; height: 38px; margin-left: 0 !important; }
@@ -228,8 +285,10 @@
   .jb-hint-phone { display: inline; }
   .jb-stagebar { display: flex; }
   .jb-board { scroll-snap-type: x mandatory; gap: 10px; }
-  .jb-col { flex: 0 0 calc(100vw - 44px); scroll-snap-align: start; max-height: none; }
-  .jb-col.jb-closed { flex-basis: calc(100vw - 44px); }
+  .jb-col { flex: 0 0 calc(100vw - 44px); max-width: none; scroll-snap-align: start; max-height: none; }
+  .jb-collapse { display: none; }
+  .jb-stagemenu { left: auto; right: 0; }
+  .jb-pillbtn span { display: none; }
   .jb-col-body { overflow: visible; }
   .jb-next { width: 34px; height: 34px; font-size: 16px; }
 }
@@ -439,4 +498,18 @@ a.jb-p-file:hover { background: var(--jb-primary); color: #fff; text-decoration:
   .jb-q-act { grid-area: act; justify-content: flex-start; }
   .jb-q-act:empty { display: none; }
   .jb-q-act .btn { height: 34px; padding: 0 14px; }
+}
+
+/* Narrow columns (kept last so it wins over the card rules): compact cards; the tags show on hover and in the job panel. */
+@container (max-width: 240px) {
+  .jb-card { padding: 8px 9px; }
+  .jb-card-title { font-size: 13px; }
+  .jb-card-cust { font-size: 11.5px; }
+  .jb-chips { display: none; }
+  .jb-card:hover .jb-chips { display: flex; }
+  .jb-age { display: none; }
+  /* Keep the person's name; the On it / Queued dot stays, its word goes. */
+  .jb-state { padding: 1px 3px; font-size: 0; gap: 0; }
+  .jb-col-head { gap: 6px; padding: 10px 10px 8px; }
+  .jb-col-name { white-space: normal; line-height: 1.2; font-size: 13px; }
 }

@@ -39,6 +39,14 @@ Project's own customer, priority and expected end date (due date) are used as-is
   Unassigned column. Stage regulars show even when idle. Dragging a card to
   another person reassigns it (alert + history row).
 - Tapping a card's Queued / On it pill flips what the person is working on now.
+- **Fits the screen:** columns share the width (the board only scrolls below
+  a minimum column width). Empty columns and the finished stage fold to a slim
+  strip with a count; click to open, or fold any column from its header.
+  Narrow columns show compact cards (tags on hover and in the panel). Folded
+  strips still accept a dragged card.
+- **Pick what to show:** the Stages button (By Stage) or People button (By
+  Person) opens a tick-list, e.g. only the engineering stages, or only the
+  engineers. Tiles count what is shown. Each is remembered per browser.
 - On phones the board shows one column per screen with chips to jump.
 - Refreshes itself when any Project changes, and every minute.
 

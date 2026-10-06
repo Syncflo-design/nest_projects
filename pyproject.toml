@@ -1,0 +1,19 @@
+[project]
+name = "nest_projects"
+authors = [{ name = "Syncflo", email = "ops@syncflo.co.za" }]
+description = "Job board for engineer-to-order work: every project on one Kanban board, from order to customer ready, with clear handovers."
+requires-python = ">=3.10"
+readme = "README.md"
+dynamic = ["version"]
+dependencies = []
+
+[build-system]
+requires = ["flit_core >=3.4,<4"]
+build-backend = "flit_core.buildapi"
+
+[tool.flit.module]
+name = "nest_projects"
+
+[tool.bench.frappe-dependencies]
+frappe = ">=16.0.0,<17.0.0"
+erpnext = ">=16.0.0,<17.0.0"

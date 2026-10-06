@@ -1,0 +1,106 @@
+{
+ "actions": [],
+ "autoname": "field:stage_name",
+ "creation": "2026-10-06 12:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "stage_name",
+  "sequence",
+  "color",
+  "column_break_1",
+  "default_owner",
+  "owner_role",
+  "gate",
+  "is_closed"
+ ],
+ "fields": [
+  {
+   "fieldname": "stage_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Stage",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "description": "Position of the column on the board, left to right.",
+   "fieldname": "sequence",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Order",
+   "reqd": 1
+  },
+  {
+   "default": "Blue",
+   "fieldname": "color",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Colour",
+   "options": "Blue\nPurple\nAmber\nTeal\nOrange\nPink\nGreen\nGray"
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Suggested as the responsible person when a job is moved into this stage.",
+   "fieldname": "default_owner",
+   "fieldtype": "Link",
+   "label": "Usually Handled By",
+   "options": "User"
+  },
+  {
+   "description": "Limits who can be picked as responsible in this stage. Leave empty for anyone.",
+   "fieldname": "owner_role",
+   "fieldtype": "Link",
+   "label": "Worked By Role",
+   "options": "Role"
+  },
+  {
+   "fieldname": "gate",
+   "fieldtype": "Select",
+   "label": "Can't Leave Until",
+   "options": "\nDrawing approved\nQC checks complete"
+  },
+  {
+   "default": "0",
+   "description": "Jobs in this stage drop off the engineers' queues.",
+   "fieldname": "is_closed",
+   "fieldtype": "Check",
+   "label": "Job is finished here"
+  }
+ ],
+ "links": [],
+ "modified": "2026-10-06 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Nest Projects",
+ "name": "Job Stage",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "read": 1,
+   "role": "System Manager",
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "read": 1,
+   "role": "Projects Manager",
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Projects User"
+  }
+ ],
+ "sort_field": "sequence",
+ "sort_order": "ASC",
+ "states": [],
+ "title_field": "stage_name",
+ "track_changes": 1
+}

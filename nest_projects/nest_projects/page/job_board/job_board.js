@@ -7,7 +7,7 @@
 frappe.pages['job-board'].on_page_load = function(wrapper) {
 	var page = frappe.ui.make_app_page({ parent: wrapper, title: __('Job Board'), single_column: true });
 
-	var BUILD_MARKER = 'v0.0.9-2026-10-06-fit-to-screen';
+	var BUILD_MARKER = 'v0.0.10-2026-10-06-handover-any-stage';
 	console.log('Job Board loaded:', BUILD_MARKER);
 
 	[
@@ -918,32 +918,54 @@ class JobBoard {
 		return (this.data.jobs || []).filter(function(j) { return j.name === name; })[0];
 	}
 
+	// The one handover dialog: pick the stage (forwards or back) and the person.
+	// to_stage is only the suggestion: the next stage, or where a card was dropped.
 	open_move(job, to_stage) {
 		var me = this;
-		var stage = this.data.stage_map[to_stage];
-		if (!job || !stage || job.job_stage === to_stage) return;
-		var back = stage.index < (this.data.stage_map[job.job_stage] || {}).index;
+		var stages = this.data.stages;
+		var here = this.data.stage_map[job && job.job_stage] || {};
+		if (!job) return;
+		if (!to_stage || to_stage === job.job_stage) {
+			var next = stages[here.index + 1] || stages[here.index - 1];
+			to_stage = next ? next.name : null;
+		}
+		if (!to_stage) return;
+		var is_back = function(name) { return (me.data.stage_map[name] || {}).index < here.index; };
 
 		var dialog = new frappe.ui.Dialog({
-			title: back ? __('Send {0} back to {1}', [job.name, to_stage]) : __('Hand {0} over to {1}', [job.name, to_stage]),
+			title: __('Hand over {0}', [job.name]),
 			fields: [
 				{
-					fieldname: 'owner', fieldtype: 'Link', options: 'User', label: __('Who takes it?'),
-					default: stage.default_owner || '',
-					get_query: function() { return { query: 'nest_projects.api.stage_users', filters: { stage: to_stage } }; }
+					fieldname: 'to_stage', fieldtype: 'Select', label: __('Which stage?'), reqd: 1,
+					options: stages.filter(function(s) { return s.name !== job.job_stage; }).map(function(s) {
+						return { value: s.name, label: s.name + (s.index < here.index ? ' ← ' + __('back') : '') };
+					}),
+					default: to_stage,
+					description: __('Now in {0}. Moving back is always allowed; moving forward checks what the stage needs first.', [job.job_stage]),
+					onchange: function() { refresh_for(dialog.get_value('to_stage')); }
 				},
 				{
-					fieldname: 'note', fieldtype: 'Small Text', label: __('Note for them (optional)'),
-					description: back ? __('Say what needs fixing.') : ''
-				}
+					fieldname: 'owner', fieldtype: 'Link', options: 'User', label: __('Who takes it?'),
+					get_query: function() { return { query: 'nest_projects.api.stage_users', filters: { stage: dialog.get_value('to_stage') } }; }
+				},
+				{ fieldname: 'note', fieldtype: 'Small Text', label: __('Note for them (optional)') }
 			],
-			primary_action_label: back ? __('Send Back') : __('Hand Over'),
+			primary_action_label: __('Hand Over'),
 			primary_action: function(values) {
 				dialog.hide();
-				me.move(job, to_stage, values.owner, values.note);
+				me.move(job, values.to_stage, values.owner, values.note);
 			}
 		});
+
+		// The person defaults to whoever usually handles the chosen stage; the button says which way it goes.
+		function refresh_for(name) {
+			var stage = me.data.stage_map[name] || {};
+			dialog.set_value('owner', stage.default_owner || '');
+			dialog.get_primary_btn().text(is_back(name) ? __('Send Back') : __('Hand Over'));
+			dialog.set_df_property('note', 'description', is_back(name) ? __('Say what needs fixing.') : '');
+		}
 		dialog.show();
+		refresh_for(to_stage);
 	}
 
 	move(job, to_stage, owner, note) {
@@ -1463,16 +1485,13 @@ class JobPanel {
 
 	render_footer(stage) {
 		var j = this.job;
-		if (!j.can_write || (!j.next_stage && !j.previous_stage)) return '';
+		if (!j.can_write || !j.stage) return '';
+		// The lock only stops forward moves; sending back stays open, so the button does too.
 		var gate = j.gate_block
-			? '<div class="jb-p-gate"><i class="ph ph-lock-simple"></i><span>' + __("Can't leave {0} yet: {1}", [jb_esc(stage.name), jb_esc(j.gate_block)]) + '</span></div>' : '';
-		var back = j.previous_stage
-			? '<button class="btn btn-default jb-p-back" data-p-action="move" data-stage="' + jb_esc(j.previous_stage) + '" title="' +
-				jb_esc(__('Send back to {0}', [j.previous_stage])) + '"><i class="ph ph-arrow-bend-up-left"></i><span>' + __('Send back') + '</span></button>' : '';
-		var next = j.next_stage
-			? '<button class="btn btn-primary jb-p-next" data-p-action="move" data-stage="' + jb_esc(j.next_stage) + '"' + (j.gate_block ? ' disabled' : '') + '>' +
-				__('Hand over to {0}', [jb_esc(j.next_stage)]) + ' <i class="ph ph-arrow-right"></i></button>' : '';
-		return '<footer class="jb-p-foot">' + gate + '<div class="jb-p-foot-row">' + back + next + '</div></footer>';
+			? '<div class="jb-p-gate"><i class="ph ph-lock-simple"></i><span>' + __("Can't move past {0} yet: {1}", [jb_esc(stage.name), jb_esc(j.gate_block)]) + '</span></div>' : '';
+		var hand = '<button class="btn btn-primary jb-p-next" data-p-action="move" data-stage="' + jb_esc(j.next_stage || '') + '">' +
+			'<i class="ph ph-arrows-left-right"></i> ' + __('Hand over') + '</button>';
+		return '<footer class="jb-p-foot">' + gate + '<div class="jb-p-foot-row">' + hand + '</div></footer>';
 	}
 
 	// ---- Actions ----------------------------------------------------------

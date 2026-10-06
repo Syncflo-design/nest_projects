@@ -27,9 +27,12 @@ Project's own customer, priority and expected end date (due date) are used as-is
   what's ready to invoice, the responsible person and time in the stage.
 - Stat tiles in the header are the filters: active, with me, held up, overdue,
   due in 7 days, to invoice. Search covers job, customer, site and person.
-- **Handover:** drag a card to another column (desktop) or tap its arrow
-  (phone). One dialog asks who takes it, prefilled from the stage, plus an
-  optional note. The new person gets an alert; the move goes in Stage History.
+- **Handover:** drag a card to another column, tap its arrow, or press Hand
+  over in the job panel. One dialog asks which stage (any stage, forwards or
+  back; it suggests the next one, or where the card was dropped) and who takes
+  it (prefilled from the stage's usual person), plus an optional note. The
+  button reads Send Back for an earlier stage. The new person gets an alert;
+  the move goes in Stage History.
 - **Gates:** a job can't move forward past a stage whose gate isn't met. Moving
   back is always allowed. The same rules apply when the stage is changed on the
   Project form.

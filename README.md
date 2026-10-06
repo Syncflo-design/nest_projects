@@ -33,5 +33,11 @@ Project's own customer, priority and expected end date (due date) are used as-is
 - **Gates:** a job can't move forward past a stage whose gate isn't met. Moving
   back is always allowed. The same rules apply when the stage is changed on the
   Project form.
-- On phones the board shows one stage per screen with stage chips to jump.
+- **By Person view** (toggle next to search, remembered per browser): one
+  column per person, "On it now" then "Next up" by priority and due date, each
+  card tagged with its stage; held-up and overdue counts in each header; an
+  Unassigned column. Stage regulars show even when idle. Dragging a card to
+  another person reassigns it (alert + history row).
+- Tapping a card's Queued / On it pill flips what the person is working on now.
+- On phones the board shows one column per screen with chips to jump.
 - Refreshes itself when any Project changes, and every minute.

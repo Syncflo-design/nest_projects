@@ -7,7 +7,7 @@
 frappe.pages['job-board'].on_page_load = function(wrapper) {
 	var page = frappe.ui.make_app_page({ parent: wrapper, title: __('Job Board'), single_column: true });
 
-	var BUILD_MARKER = 'v0.0.2-2026-10-06-board';
+	var BUILD_MARKER = 'v0.0.3-2026-10-06-by-person';
 	console.log('Job Board loaded:', BUILD_MARKER);
 
 	[
@@ -49,6 +49,7 @@ var JB_FILTERS = [
 	{ key: 'invoice', label: __('To Invoice'), tone: 'good' }
 ];
 var JB_SOON_DAYS = 7;
+var JB_VIEW_KEY = 'nest-projects-board-view';
 
 function jb_esc(s) {
 	var map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
@@ -75,6 +76,9 @@ class JobBoard {
 		this.query = '';
 		this.drag_name = null;
 		this.refresh_timer = null;
+		// By Stage or By Person, remembered per browser.
+		this.view = 'stage';
+		try { if (localStorage.getItem(JB_VIEW_KEY) === 'person') this.view = 'person'; } catch (e) { /* storage blocked */ }
 
 		// v16: page.body is jQuery; create our own container (gotcha 2026-05-10, Variant 2).
 		this.$main = $('<div class="jb-root"></div>').appendTo(page.body);
@@ -176,6 +180,10 @@ class JobBoard {
 			'  <div class="jb-toolbar">',
 			'    <label class="jb-search"><i class="ph ph-magnifying-glass"></i>',
 			'      <input id="jb-q" type="search" autocomplete="off" placeholder="' + __('Search job, customer, site, person') + '"></label>',
+			'    <div class="jb-views" role="tablist">',
+			'      <button class="jb-view" data-view="stage" role="tab"><i class="ph ph-kanban"></i><span>' + __('By Stage') + '</span></button>',
+			'      <button class="jb-view" data-view="person" role="tab"><i class="ph ph-users-three"></i><span>' + __('By Person') + '</span></button>',
+			'    </div>',
 			'    <span class="jb-filter-note" id="jb-filter-note"></span>',
 			'    <button class="jb-iconbtn jb-push" id="jb-refresh" title="' + __('Refresh') + '"><i class="ph ph-arrows-clockwise"></i></button>',
 			'  </div>',
@@ -191,11 +199,15 @@ class JobBoard {
 		if (!d) return;
 
 		var active = d.jobs.filter(function(j) { return !j.closed; });
+		var by_person = this.view === 'person';
 		$('#jb-sub', this.$main).html(
 			jb_esc(__('{0} jobs across {1} stages.', [active.length, d.stages.length])) + ' ' +
-			'<span class="jb-hint-desk">' + __('Drag a card to hand it over.') + '</span>' +
+			'<span class="jb-hint-desk">' + (by_person ? __('Drag a card to another person to reassign it.') : __('Drag a card to hand it over.')) + '</span>' +
 			'<span class="jb-hint-phone">' + __('Tap the arrow on a card to hand it over.') + '</span>'
 		);
+		$('.jb-view', this.$main).each(function() {
+			$(this).toggleClass('active', $(this).attr('data-view') === me.view);
+		});
 
 		// Stat tiles: the counts are the filters.
 		var counts = {};
@@ -216,6 +228,10 @@ class JobBoard {
 			__('Showing: {0}', [jb_esc(current.label)]) + '<a data-filter="all">' + __('Show all') + '</a>');
 
 		var visible = d.jobs.filter(function(j) { return me.matches(j); });
+		if (by_person) {
+			this.render_people(visible);
+			return;
+		}
 		var by_stage = {};
 		visible.forEach(function(j) { (by_stage[j.job_stage] = by_stage[j.job_stage] || []).push(j); });
 
@@ -254,7 +270,8 @@ class JobBoard {
 		].join('\n');
 	}
 
-	render_card(j, stage) {
+	// person_mode: the card sits in a person's column, so it shows its stage instead of its owner.
+	render_card(j, stage, person_mode) {
 		var d = this.data;
 		var next = d.stages[stage.index + 1];
 
@@ -270,14 +287,16 @@ class JobBoard {
 		var title = j.project_name && j.project_name !== j.name ? j.project_name : (j.customer || '');
 
 		return [
-			'<div class="jb-card' + (j.held ? ' jb-held' : '') + '" draggable="true" data-name="' + jb_esc(j.name) + '">',
+			'<div class="jb-card' + (j.held ? ' jb-held' : '') + '" draggable="true" data-name="' + jb_esc(j.name) + '"' +
+				(person_mode ? ' style="--jb-stage:' + stage.hex + '"' : '') + '>',
 			'  <div class="jb-card-top"><span class="jb-jobno">' + jb_esc(j.name) + '</span>' +
 				(j.priority === 'High' ? '<i class="ph ph-flag jb-prio" title="' + __('High priority') + '"></i>' : '') + due + '</div>',
 			'  <div class="jb-card-title">' + jb_esc(title) + '</div>',
 			where ? '  <div class="jb-card-cust"><i class="ph ph-buildings"></i>' + where + '</div>' : '',
 			j.held ? '  <div class="jb-block"><i class="ph ph-warning-octagon"></i><span>' + jb_esc(j.job_blocker) + '</span></div>' : '',
 			this.render_tags(j),
-			'  <div class="jb-card-foot">' + this.render_owner(j) + this.render_age(j) +
+			'  <div class="jb-card-foot">' +
+				(person_mode ? this.render_stage_tag(stage) + this.render_state(j) : this.render_owner(j)) + this.render_age(j) +
 				(next && !stage.is_closed ? '<button class="jb-next" data-next="' + jb_esc(next.name) + '" title="' +
 					jb_esc(__('Hand over to {0}', [next.name])) + '"><i class="ph ph-arrow-right"></i></button>' : '') + '</div>',
 			'</div>'
@@ -314,13 +333,89 @@ class JobBoard {
 		if (!j.job_owner) {
 			return '<span class="jb-avatar jb-none"><i class="ph ph-user"></i></span><span class="jb-owner jb-none">' + __('Unassigned') + '</span>';
 		}
-		var u = this.data.users[j.job_owner] || {};
-		var face = u.image ? '<img src="' + jb_esc(u.image) + '" alt="">' : jb_esc(jb_initials(j.owner_name));
-		var state = j.job_work_status === 'In Progress'
-			? '<span class="jb-state jb-prog" title="' + __('Working on it now') + '"><i></i>' + __('On it') + '</span>'
-			: '<span class="jb-state" title="' + __('Waiting its turn') + '"><i></i>' + __('Queued') + '</span>';
-		return '<span class="jb-avatar" style="--jb-av:' + jb_hash_color(j.job_owner) + '" title="' + jb_esc(j.owner_name) + '">' + face + '</span>' +
-			'<span class="jb-owner">' + jb_esc(j.owner_name.split(' ')[0]) + '</span>' + (j.closed ? '' : state);
+		return this.avatar(j.job_owner) + '<span class="jb-owner">' + jb_esc(j.owner_name.split(' ')[0]) + '</span>' + this.render_state(j);
+	}
+
+	avatar(user, big) {
+		var u = this.data.users[user] || {};
+		var name = u.full_name || user;
+		var face = u.image ? '<img src="' + jb_esc(u.image) + '" alt="">' : jb_esc(jb_initials(name));
+		return '<span class="jb-avatar' + (big ? ' jb-avatar-lg' : '') + '" style="--jb-av:' + jb_hash_color(user) + '" title="' + jb_esc(name) + '">' + face + '</span>';
+	}
+
+	// Tapping it flips On it / Queued.
+	render_state(j) {
+		if (j.closed || !j.job_owner) return '';
+		return j.job_work_status === 'In Progress'
+			? '<button class="jb-state jb-prog" data-work="Queued" title="' + __('Working on it now. Tap to put back in the queue.') + '"><i></i>' + __('On it') + '</button>'
+			: '<button class="jb-state" data-work="In Progress" title="' + __('Waiting its turn. Tap when work starts.') + '"><i></i>' + __('Queued') + '</button>';
+	}
+
+	render_stage_tag(stage) {
+		return '<span class="jb-stagetag" title="' + jb_esc(__('Stage')) + '"><i></i>' + jb_esc(stage.name) + '</span>';
+	}
+
+	// ---- By Person --------------------------------------------------------
+
+	render_people(visible) {
+		var d = this.data;
+		var me = this;
+		var people = {};
+		visible.filter(function(j) { return !j.closed; }).forEach(function(j) {
+			var key = j.job_owner || '';
+			(people[key] = people[key] || []).push(j);
+		});
+		// With nothing filtered, show the stage regulars even when idle: a free engineer is worth seeing.
+		if (this.filter === 'all' && !this.query) {
+			d.stages.forEach(function(s) {
+				if (s.default_owner && !s.is_closed && !people[s.default_owner]) people[s.default_owner] = [];
+			});
+		}
+		var name_of = function(u) { return ((d.users[u] || {}).full_name || u).toLowerCase(); };
+		var keys = Object.keys(people).filter(Boolean).sort(function(a, b) { return name_of(a) < name_of(b) ? -1 : 1; });
+		if (people['']) keys.push('');
+
+		$('#jb-stagebar', this.$main).html(keys.map(function(u) {
+			var label = u ? (d.users[u] || {}).full_name || u : __('Unassigned');
+			return '<span class="jb-chip-stage" data-goto="' + jb_esc(u || '__none') + '" style="--jb-stage:' + (u ? jb_hash_color(u) : '#94a3b8') + '">' +
+				'<span class="jb-dot"></span>' + jb_esc(label) + ' <b>' + people[u].length + '</b></span>';
+		}).join(''));
+
+		$('#jb-board', this.$main).html(keys.length ? keys.map(function(u) { return me.render_person(u, people[u]); }).join('\n')
+			: '<div class="jb-empty">' + __('No jobs match.') + '</div>');
+	}
+
+	render_person(user, jobs) {
+		var d = this.data;
+		var me = this;
+		jobs.sort(function(a, b) {
+			var pa = a.job_work_status === 'In Progress' ? 0 : 1, pb = b.job_work_status === 'In Progress' ? 0 : 1;
+			return pa !== pb ? pa - pb : me.compare(a, b);
+		});
+		var now = jobs.filter(function(j) { return j.job_work_status === 'In Progress'; });
+		var queue = jobs.filter(function(j) { return j.job_work_status !== 'In Progress'; });
+		var held = jobs.filter(function(j) { return j.held; }).length;
+		var over = jobs.filter(function(j) { return j.over; }).length;
+		var card = function(j) { return me.render_card(j, d.stage_map[j.job_stage] || {}, true); };
+
+		var name = user ? (d.users[user] || {}).full_name || user : __('Unassigned');
+		var face = user ? this.avatar(user, true) : '<span class="jb-avatar jb-avatar-lg jb-none"><i class="ph ph-user"></i></span>';
+		var meta = [jobs.length === 1 ? __('1 job') : __('{0} jobs', [jobs.length])];
+		if (held) meta.push('<span class="jb-m-bad">' + __('{0} held up', [held]) + '</span>');
+		if (over) meta.push('<span class="jb-m-bad">' + __('{0} overdue', [over]) + '</span>');
+
+		var body = '';
+		if (now.length) body += '<div class="jb-section">' + __('On it now') + '</div>' + now.map(card).join('\n');
+		body += '<div class="jb-section">' + (user ? __('Next up') : __('Waiting for someone')) + ' <b>' + queue.length + '</b></div>';
+		body += queue.length ? queue.map(card).join('\n') : '<div class="jb-empty">' + (user ? __('Nothing queued') : __('Nothing waiting')) + '</div>';
+
+		return [
+			'<div class="jb-col jb-person" data-col="' + jb_esc(user || '__none') + '" style="--jb-stage:' + (user ? jb_hash_color(user) : '#94a3b8') + '">',
+			'  <div class="jb-col-head">' + face + '<div class="jb-person-id"><div class="jb-col-name">' + jb_esc(name) + '</div>' +
+				'<div class="jb-col-meta">' + meta.join(' &middot; ') + '</div></div></div>',
+			'  <div class="jb-col-body" data-person="' + jb_esc(user) + '">' + body + '</div>',
+			'</div>'
+		].join('\n');
 	}
 
 	render_age(j) {
@@ -379,9 +474,46 @@ class JobBoard {
 		});
 	}
 
+	assign(job, owner) {
+		var me = this;
+		if (!job || (job.job_owner || '') === (owner || '')) return;
+		var who = owner ? (this.data.users[owner] || {}).full_name || owner : __('nobody');
+		frappe.call({
+			method: 'nest_projects.api.assign_job',
+			args: { project: job.name, owner: owner || null },
+			freeze: true,
+			callback: function() {
+				frappe.show_alert({ message: __('{0} is now with {1}', [job.name, who]), indicator: 'green' });
+				me.refresh();
+			},
+			error: function() { me.render(); }
+		});
+	}
+
+	set_work(job, status) {
+		var me = this;
+		if (!job) return;
+		frappe.call({
+			method: 'nest_projects.api.set_work_status',
+			args: { project: job.name, status: status },
+			callback: function() { me.refresh(); }
+		});
+	}
+
 	bind_events() {
 		var me = this;
 		var $m = this.$main;
+
+		$m.on('click', '[data-view]', function() {
+			me.view = $(this).attr('data-view');
+			try { localStorage.setItem(JB_VIEW_KEY, me.view); } catch (e) { /* storage blocked */ }
+			me.render();
+			$m.find('#jb-board').scrollLeft(0);
+		});
+		$m.on('click', '.jb-state[data-work]', function(e) {
+			e.stopPropagation();
+			me.set_work(me.job($(this).closest('.jb-card').attr('data-name')), $(this).attr('data-work'));
+		});
 
 		$m.on('click', '[data-filter]', function() {
 			me.filter = $(this).attr('data-filter');
@@ -432,7 +564,10 @@ class JobBoard {
 			$(this).removeClass('jb-drop');
 			var name = me.drag_name;
 			me.drag_name = null;
-			if (name) me.open_move(me.job(name), $(this).attr('data-stage'));
+			if (!name) return;
+			// A person's column reassigns; a stage column hands over.
+			if ($(this).is('[data-person]')) me.assign(me.job(name), $(this).attr('data-person'));
+			else me.open_move(me.job(name), $(this).attr('data-stage'));
 		});
 	}
 }

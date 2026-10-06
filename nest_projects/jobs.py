@@ -14,24 +14,29 @@ QC_GATE = "QC checks complete"
 
 def validate_project(doc, method=None):
 	stamp_checks(doc)
-	if not doc.has_value_changed("job_stage"):
-		return
 	before = doc.get_doc_before_save()
-	old = before.job_stage if before else None
-	new = doc.job_stage
-	if not old and not new:
+	old_stage = (before.job_stage if before else None) or None
+	old_owner = (before.job_owner if before else None) or None
+	stage = doc.job_stage or None
+	stage_moved = stage != old_stage
+	owner_moved = (doc.job_owner or None) != old_owner
+
+	if stage_moved and old_stage and stage:
+		check_gates(doc, old_stage, stage)
+	if stage_moved:
+		doc.job_stage_since = now_datetime() if stage else None
+	# History covers every handover: a new stage, or a new person in the same stage.
+	if not (stage_moved or (owner_moved and stage)):
 		return
-	if old and new:
-		check_gates(doc, old, new)
-	doc.job_stage_since = now_datetime() if new else None
 	doc.append(
 		"job_stage_log",
 		{
-			"from_stage": old,
-			"to_stage": new,
+			"from_stage": old_stage,
+			"to_stage": stage,
+			"to_owner": doc.job_owner or None,
 			"moved_by": frappe.session.user,
 			"moved_on": now_datetime(),
-			"note": doc.flags.get("job_move_note"),
+			"note": doc.flags.get("job_move_note") or (None if stage_moved else _("Reassigned")),
 		},
 	)
 

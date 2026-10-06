@@ -77,6 +77,30 @@ def move_job(project, to_stage, owner=None, note=None):
 
 
 @frappe.whitelist()
+def assign_job(project, owner=None):
+	"""Gives a job to someone else in the same stage (By Person view drag)."""
+	doc = frappe.get_doc("Project", project)
+	doc.check_permission("write")
+	owner = owner or None
+	if (doc.job_owner or None) == owner:
+		return
+	doc.job_owner = owner
+	doc.job_work_status = "Queued"
+	doc.save()
+
+
+@frappe.whitelist()
+def set_work_status(project, status):
+	"""On it / Queued: what the responsible person is working on right now."""
+	if status not in ("Queued", "In Progress"):
+		frappe.throw(_("Unknown progress {0}.").format(status))
+	doc = frappe.get_doc("Project", project)
+	doc.check_permission("write")
+	doc.job_work_status = status
+	doc.save()
+
+
+@frappe.whitelist()
 @frappe.validate_and_sanitize_search_inputs
 def stage_users(doctype, txt, searchfield, start, page_len, filters):
 	"""People who can take a job in a stage: those with the stage's role, or anyone if it has none."""

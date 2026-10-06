@@ -7,7 +7,7 @@
 frappe.pages['job-board'].on_page_load = function(wrapper) {
 	var page = frappe.ui.make_app_page({ parent: wrapper, title: __('Job Board'), single_column: true });
 
-	var BUILD_MARKER = 'v0.0.4-2026-10-06-demo-data';
+	var BUILD_MARKER = 'v0.0.5-2026-10-06-job-panel';
 	console.log('Job Board loaded:', BUILD_MARKER);
 
 	[
@@ -86,6 +86,7 @@ class JobBoard {
 		if ($head && $head.length) $head.hide();
 
 		this.render_shell();
+		this.panel = new JobPanel(this);
 		this.bind_events();
 		this.listen();
 		this.refresh();
@@ -526,6 +527,7 @@ class JobBoard {
 			callback: function() {
 				frappe.show_alert({ message: __('{0} is now in {1}', [job.name, to_stage]), indicator: 'green' });
 				me.refresh();
+				me.panel.reload_if(job.name);
 			},
 			// The server says why (e.g. a gate); put the card back where it was.
 			error: function() { me.render(); }
@@ -543,6 +545,7 @@ class JobBoard {
 			callback: function() {
 				frappe.show_alert({ message: __('{0} is now with {1}', [job.name, who]), indicator: 'green' });
 				me.refresh();
+				me.panel.reload_if(job.name);
 			},
 			error: function() { me.render(); }
 		});
@@ -596,7 +599,7 @@ class JobBoard {
 			me.open_move(me.job($(this).closest('.jb-card').attr('data-name')), $(this).attr('data-next'));
 		});
 		$m.on('click', '.jb-card', function() {
-			frappe.set_route('Form', 'Project', $(this).attr('data-name'));
+			me.panel.open($(this).attr('data-name'));
 		});
 
 		// Drag and drop between columns (desktop). Phones use the arrow button.
@@ -628,6 +631,454 @@ class JobBoard {
 			// A person's column reassigns; a stage column hands over.
 			if ($(this).is('[data-person]')) me.assign(me.job(name), $(this).attr('data-person'));
 			else me.open_move(me.job(name), $(this).attr('data-stage'));
+		});
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Job panel: tapping a card opens the whole job beside the board, with one-tap
+// actions (held up, drawing approval, materials, QC, invoiced, hand over).
+// Panel markup uses data-p-* attributes so the board's own handlers ignore it.
+
+var JB_MATERIAL_NEXT = { 'To Order': 'Ordered', 'Ordered': 'Received', 'Received': 'To Order', 'In Stock': 'To Order' };
+var JB_MATERIAL_TONE = { 'To Order': 'warn', 'Ordered': '', 'Received': 'good', 'In Stock': 'good' };
+var JB_DRAWING_TONE = { 'Draft': '', 'Sent for Approval': 'warn', 'Approved': 'good', 'Superseded': 'bad' };
+
+function jb_next_rev(rev) {
+	rev = String(rev || '').trim();
+	if (/^\d+$/.test(rev)) return String(parseInt(rev, 10) + 1);
+	if (/^[A-Ya-y]$/.test(rev)) return String.fromCharCode(rev.charCodeAt(0) + 1);
+	return rev ? rev + '1' : 'A';
+}
+
+function jb_when(dt) {
+	if (!dt) return '';
+	return moment(dt).format(String(dt).length > 10 ? 'D MMM, HH:mm' : 'D MMM YYYY');
+}
+
+function jb_tag(html, tone) {
+	return '<span class="jb-tag' + (tone ? ' jb-t-' + tone : '') + '">' + html + '</span>';
+}
+
+class JobPanel {
+
+	constructor(board) {
+		this.board = board;
+		this.name = null;
+		this.job = null;
+		this.editing_blocker = false;
+		this.$el = $([
+			'<div class="jb-panel-wrap">',
+			'  <div class="jb-panel-backdrop"></div>',
+			'  <aside class="jb-panel" role="dialog" aria-modal="true"></aside>',
+			'</div>'
+		].join('\n')).appendTo(board.$main);
+		this.$panel = this.$el.find('.jb-panel');
+		this.bind();
+	}
+
+	open(name) {
+		this.name = name;
+		this.job = null;
+		this.editing_blocker = false;
+		this.$panel.removeAttr('style').html('<div class="jb-p-loading"><i class="ph ph-kanban"></i>' + __('Opening {0}...', [jb_esc(name)]) + '</div>');
+		this.$el.addClass('open');
+		this.load();
+	}
+
+	close() {
+		this.name = null;
+		this.$el.removeClass('open');
+	}
+
+	reload_if(name) {
+		if (this.name && this.name === name) this.load();
+	}
+
+	load() {
+		var me = this;
+		var name = this.name;
+		frappe.call({ method: 'nest_projects.panel.get_job', args: { project: name } }).then(function(r) {
+			if (me.name === name && r.message) me.show(r.message);
+		});
+	}
+
+	// Runs a panel action; the server answers with the refreshed job.
+	act(method, args) {
+		var me = this;
+		var name = this.name;
+		frappe.call({
+			method: 'nest_projects.panel.' + method,
+			args: Object.assign({ project: name }, args || {}),
+			callback: function(r) {
+				if (me.name === name && r.message) me.show(r.message);
+				me.board.refresh();
+			}
+		});
+	}
+
+	show(job) {
+		this.job = job;
+		this.render();
+	}
+
+	user_name(user) {
+		return user ? ((this.job.users[user] || {}).full_name || user) : '';
+	}
+
+	// ---- Rendering --------------------------------------------------------
+
+	render() {
+		var j = this.job;
+		var board = this.board;
+		var stage = (board.data && board.data.stage_map[j.stage]) || { name: j.stage || __('No stage'), hex: '#94a3b8' };
+		var where = [j.customer, j.site].filter(Boolean).map(jb_esc).join(' &middot; ');
+		var scroll = this.$panel.find('.jb-p-body').scrollTop() || 0;
+
+		this.$panel.attr('style', '--jb-stage:' + stage.hex);
+		this.$panel.html([
+			'<header class="jb-p-head">',
+			'  <div class="jb-p-top"><span class="jb-jobno">' + jb_esc(j.name) + '</span>' +
+				(j.priority === 'High' ? '<i class="ph ph-flag jb-prio" title="' + __('High priority') + '"></i>' : '') +
+				board.render_stage_tag(stage) + '<span class="jb-p-gap"></span>' +
+				'<a class="jb-p-icon" href="/app/project/' + encodeURIComponent(j.name) + '" title="' + __('Open the full record') + '"><i class="ph ph-arrow-square-out"></i></a>' +
+				'<button class="jb-p-icon" data-p-action="close" title="' + __('Close') + '"><i class="ph ph-x"></i></button></div>',
+			'  <div class="jb-p-title">' + jb_esc(j.project_name || j.name) + '</div>',
+			where ? '  <div class="jb-card-cust"><i class="ph ph-buildings"></i>' + where + '</div>' : '',
+			'</header>',
+			'<div class="jb-p-body">',
+			this.render_facts(),
+			this.render_blocker(),
+			this.render_drawings(),
+			this.render_materials(),
+			this.render_checks(),
+			this.render_milestones(),
+			this.render_history(),
+			'</div>',
+			this.render_footer(stage)
+		].join('\n'));
+		this.$panel.find('.jb-p-body').scrollTop(scroll);
+	}
+
+	render_facts() {
+		var j = this.job;
+		var due = '<span class="jb-p-muted">' + __('Not set') + '</span>';
+		if (j.due) {
+			var days = moment(j.due).diff(moment(this.board.data.today), 'days');
+			var cls = days < 0 ? 'jb-over' : (days <= JB_SOON_DAYS ? 'jb-soon' : '');
+			var rel = days < 0 ? __('{0} days overdue', [-days]) : (days === 0 ? __('today') : __('in {0} days', [days]));
+			due = '<span class="jb-due ' + cls + '">' + jb_esc(moment(j.due).format('D MMM YYYY')) + '</span> <span class="jb-p-muted">' + rel + '</span>';
+		}
+		var owner = j.owner
+			? this.board.avatar(j.owner) + '<span class="jb-owner">' + jb_esc(this.user_name(j.owner)) + '</span>' + this.render_state()
+			: '<span class="jb-avatar jb-none"><i class="ph ph-user"></i></span><span class="jb-owner jb-none">' + __('Unassigned') + '</span>';
+		if (j.can_write) owner += '<button class="jb-p-link" data-p-action="reassign">' + __('Change') + '</button>';
+
+		var fact = function(label, value, wide) {
+			return '<div class="jb-p-fact' + (wide ? ' jb-p-wide' : '') + '"><div class="jb-p-label">' + label + '</div><div class="jb-p-value">' + value + '</div></div>';
+		};
+		return [
+			'<div class="jb-p-facts">',
+			fact(__('Responsible'), '<span class="jb-p-owner">' + owner + '</span>', true),
+			fact(__('Due'), due),
+			fact(__('Priority'), jb_esc(__(j.priority || 'Medium'))),
+			fact(__('Quote'), jb_esc(j.quote || '-')),
+			fact(__('Customer PO'), jb_esc(j.po || '-')),
+			j.scope ? fact(__('Scope'), '<span class="jb-p-scope">' + jb_esc(j.scope) + '</span>', true) : '',
+			'</div>'
+		].join('\n');
+	}
+
+	render_state() {
+		var j = this.job;
+		if (!j.can_write) return '';
+		return j.work_status === 'In Progress'
+			? '<button class="jb-state jb-prog" data-p-work="Queued" title="' + __('Tap to put back in the queue') + '"><i></i>' + __('On it') + '</button>'
+			: '<button class="jb-state" data-p-work="In Progress" title="' + __('Tap when work starts') + '"><i></i>' + __('Queued') + '</button>';
+	}
+
+	render_blocker() {
+		var j = this.job;
+		if (this.editing_blocker) {
+			return [
+				'<div class="jb-p-blockedit">',
+				'  <label class="jb-p-label" for="jb-p-blocker">' + __('What is holding this job up?') + '</label>',
+				'  <textarea id="jb-p-blocker" rows="2" placeholder="' + __('e.g. Waiting for the client to confirm the material') + '">' + jb_esc(j.blocker || '') + '</textarea>',
+				'  <div class="jb-p-row-actions">',
+				'    <button class="btn btn-xs btn-default" data-p-action="blocker-cancel">' + __('Cancel') + '</button>',
+				'    <button class="btn btn-xs btn-danger" data-p-action="blocker-save">' + __('Mark Held Up') + '</button>',
+				'  </div>',
+				'</div>'
+			].join('\n');
+		}
+		if (j.blocker) {
+			return [
+				'<div class="jb-block jb-p-block"><i class="ph ph-warning-octagon"></i><span class="jb-p-grow">' + jb_esc(j.blocker) + '</span>',
+				j.can_write ? '<button class="jb-p-link" data-p-action="blocker-edit">' + __('Edit') + '</button>' +
+					'<button class="btn btn-xs btn-default" data-p-action="blocker-clear"><i class="ph ph-check"></i> ' + __('Sorted') + '</button>' : '',
+				'</div>'
+			].join('');
+		}
+		return j.can_write ? '<button class="jb-p-held" data-p-action="blocker-edit"><i class="ph ph-hand-palm"></i> ' + __('Mark as held up') + '</button>' : '';
+	}
+
+	section(icon, title, summary, action, body) {
+		return [
+			'<section class="jb-p-sec">',
+			'  <div class="jb-p-sec-head"><i class="ph ph-' + icon + '"></i><span>' + title + '</span>' +
+				(summary ? '<span class="jb-p-sum">' + summary + '</span>' : '') + '<span class="jb-p-gap"></span>' + (action || '') + '</div>',
+			body,
+			'</section>'
+		].join('\n');
+	}
+
+	render_drawings() {
+		var j = this.job;
+		var live = j.drawings.filter(function(d) { return d.status !== 'Superseded'; });
+		var approved = live.some(function(d) { return d.status === 'Approved'; });
+		var summary = approved ? jb_tag(__('Approved'), 'good')
+			: (j.drawing_not_required ? '<span class="jb-p-muted">' + __('No approval needed') + '</span>'
+				: (live.length ? jb_tag(__('Not approved yet'), 'warn') : ''));
+		var add = j.can_write ? '<button class="jb-p-link" data-p-action="drawing-add"><i class="ph ph-plus"></i> ' + __('New revision') + '</button>' : '';
+
+		var rows = j.drawings.slice().reverse().map(function(d) {
+			var actions = '';
+			if (j.can_write && d.status === 'Draft') {
+				actions = '<button class="btn btn-xs btn-default" data-p-action="drawing-status" data-row="' + jb_esc(d.name) + '" data-status="Sent for Approval">' +
+					'<i class="ph ph-paper-plane-tilt"></i> ' + __('Sent to client') + '</button>';
+			} else if (j.can_write && d.status === 'Sent for Approval') {
+				actions = '<button class="btn btn-xs btn-success" data-p-action="drawing-status" data-row="' + jb_esc(d.name) + '" data-status="Approved">' +
+					'<i class="ph ph-seal-check"></i> ' + __('Client approved') + '</button>';
+			}
+			var file = d.file
+				? '<a class="jb-p-file" href="' + jb_esc(d.file) + '" target="_blank" rel="noopener" title="' + __('Open drawing') + '"><i class="ph ph-eye"></i></a>'
+				: '<span class="jb-p-file jb-p-nofile"><i class="ph ph-file-text"></i></span>';
+			return [
+				'<div class="jb-p-item' + (d.status === 'Superseded' ? ' jb-p-old' : '') + '">',
+				'  ' + file,
+				'  <div class="jb-p-grow"><div class="jb-p-item-title">' + jb_esc(d.drawing_no) + ' <span class="jb-p-rev">' + __('Rev {0}', [jb_esc(d.revision || '-')]) + '</span></div>',
+				'    <div class="jb-p-item-sub">' + jb_esc(d.title || '') + (d.approved_on ? ' &middot; ' + __('approved {0}', [jb_esc(jb_when(d.approved_on))]) : '') + '</div></div>',
+				'  <div class="jb-p-item-side">' + jb_tag(jb_esc(__(d.status)), JB_DRAWING_TONE[d.status] || '') + actions + '</div>',
+				'</div>'
+			].join('\n');
+		}).join('\n');
+		var empty = '<div class="jb-p-empty">' + (j.drawing_not_required ? __('This job needs no customer drawing approval.') : __('No drawings yet.')) + '</div>';
+		return this.section('file-text', __('Drawings'), summary, add, rows || empty);
+	}
+
+	render_materials() {
+		var j = this.job;
+		if (!j.materials.length) return '';
+		var count = function(s) { return j.materials.filter(function(m) { return m.status === s; }).length; };
+		var parts = [];
+		if (count('To Order')) parts.push(jb_tag(__('{0} to order', [count('To Order')]), 'warn'));
+		if (count('Ordered')) parts.push(jb_tag(__('{0} on order', [count('Ordered')]), ''));
+		if (!parts.length) parts.push(jb_tag(__('All in'), 'good'));
+		var rows = j.materials.map(function(m) {
+			var next = JB_MATERIAL_NEXT[m.status] || 'To Order';
+			var chip = jb_tag(jb_esc(__(m.status)), JB_MATERIAL_TONE[m.status] || '');
+			if (j.can_write) {
+				chip = '<button class="jb-p-chipbtn" data-p-action="material" data-row="' + jb_esc(m.name) + '" data-status="' + jb_esc(next) +
+					'" title="' + jb_esc(__('Tap to mark {0}', [__(next)])) + '">' + chip + '</button>';
+			}
+			return [
+				'<div class="jb-p-item">',
+				'  <span class="jb-p-qty">' + jb_esc(parseFloat(m.qty || 0)) + '&times;</span>',
+				'  <div class="jb-p-grow"><div class="jb-p-item-title">' + jb_esc(m.description || m.item || '') + '</div>' +
+					(m.status === 'Ordered' && m.expected_on ? '<div class="jb-p-item-sub">' + __('expected {0}', [jb_esc(jb_when(m.expected_on))]) + '</div>' : '') + '</div>',
+				'  <div class="jb-p-item-side">' + chip + '</div>',
+				'</div>'
+			].join('\n');
+		}).join('\n');
+		return this.section('package', __('Materials'), parts.join(''), '', rows);
+	}
+
+	render_checks() {
+		var j = this.job;
+		var me = this;
+		if (!j.checks.length) return '';
+		var done = j.checks.filter(function(c) { return c.done; }).length;
+		var pct = Math.round(done * 100 / j.checks.length);
+		var summary = jb_tag(done + ' / ' + j.checks.length, done === j.checks.length ? 'good' : '');
+		var tagname = j.can_write ? 'button' : 'div';
+		var rows = j.checks.map(function(c) {
+			var who = c.done ? '<div class="jb-p-item-sub">' + jb_esc(me.user_name(c.done_by)) + ' &middot; ' + jb_esc(jb_when(c.done_on)) + '</div>' : '';
+			return [
+				'<' + tagname + ' class="jb-p-item jb-p-check' + (c.done ? ' jb-p-done' : '') + '"' +
+					(j.can_write ? ' data-p-action="check" data-row="' + jb_esc(c.name) + '" data-done="' + (c.done ? 0 : 1) + '"' : '') + '>',
+				'  <i class="ph ' + (c.done ? 'ph-check-circle' : 'ph-circle') + ' jb-p-tick"></i>',
+				'  <div class="jb-p-grow"><div class="jb-p-item-title">' + jb_esc(c.check) + '</div>' + who + '</div>',
+				'</' + tagname + '>'
+			].join('\n');
+		}).join('\n');
+		var bar = '<div class="jb-p-bar"><span style="width:' + pct + '%"></span></div>';
+		return this.section('check-square', __('QC / FAT Checks'), summary, '', bar + rows);
+	}
+
+	render_milestones() {
+		var j = this.job;
+		if (!j.milestones.length) return '';
+		var here = j.stage_order[j.stage] || 0;
+		var rows = j.milestones.map(function(m) {
+			var ready = !m.invoiced && m.due_at_stage && (j.stage_order[m.due_at_stage] || 0) < here;
+			var side;
+			if (m.invoiced) side = jb_tag('<i class="ph ph-check"></i>' + jb_esc(m.invoice_ref || __('Invoiced')), 'good');
+			else if (ready && j.can_write) side = '<button class="btn btn-xs btn-warning" data-p-action="invoiced" data-row="' + jb_esc(m.name) + '"><i class="ph ph-receipt"></i> ' + __('Mark invoiced') + '</button>';
+			else if (ready) side = jb_tag(__('Ready to invoice'), 'warn');
+			else side = jb_tag(__('Not yet'), '');
+			return [
+				'<div class="jb-p-item">',
+				'  <span class="jb-p-qty">' + jb_esc(m.percent || 0) + '%</span>',
+				'  <div class="jb-p-grow"><div class="jb-p-item-title">' + jb_esc(m.label) + '</div>' +
+					(m.due_at_stage ? '<div class="jb-p-item-sub">' + __('when the job leaves {0}', [jb_esc(m.due_at_stage)]) + '</div>' : '') + '</div>',
+				'  <div class="jb-p-item-side">' + side + '</div>',
+				'</div>'
+			].join('\n');
+		}).join('\n');
+		return this.section('receipt', __('Payment Milestones'), '<span class="jb-p-muted">' + __('Invoices are raised in Sage') + '</span>', '', rows);
+	}
+
+	render_history() {
+		var j = this.job;
+		var me = this;
+		if (!j.history.length) return '';
+		var rows = j.history.map(function(h) {
+			var what = h.from_stage === h.to_stage
+				? __('Reassigned in {0}', [jb_esc(h.to_stage)])
+				: (h.from_stage ? jb_esc(h.from_stage) + ' <i class="ph ph-arrow-right"></i> ' + jb_esc(h.to_stage) : __('Opened in {0}', [jb_esc(h.to_stage)]));
+			var who = [];
+			if (h.to_owner) who.push(__('to {0}', [jb_esc(me.user_name(h.to_owner))]));
+			if (h.moved_by) who.push(__('by {0}', [jb_esc(me.user_name(h.moved_by))]));
+			return [
+				'<div class="jb-p-event">',
+				'  <span class="jb-p-dot"></span>',
+				'  <div class="jb-p-grow"><div class="jb-p-item-title">' + what + '</div>',
+				'    <div class="jb-p-item-sub">' + who.join(' ') + (who.length ? ' &middot; ' : '') + jb_esc(jb_when(h.moved_on)) + '</div>',
+				h.note ? '    <div class="jb-p-note">' + jb_esc(h.note) + '</div>' : '',
+				'  </div>',
+				'</div>'
+			].join('\n');
+		}).join('\n');
+		return this.section('clock-counter-clockwise', __('History'), '', '', '<div class="jb-p-timeline">' + rows + '</div>');
+	}
+
+	render_footer(stage) {
+		var j = this.job;
+		if (!j.can_write || (!j.next_stage && !j.previous_stage)) return '';
+		var gate = j.gate_block
+			? '<div class="jb-p-gate"><i class="ph ph-lock-simple"></i><span>' + __("Can't leave {0} yet: {1}", [jb_esc(stage.name), jb_esc(j.gate_block)]) + '</span></div>' : '';
+		var back = j.previous_stage
+			? '<button class="btn btn-default jb-p-back" data-p-action="move" data-stage="' + jb_esc(j.previous_stage) + '" title="' +
+				jb_esc(__('Send back to {0}', [j.previous_stage])) + '"><i class="ph ph-arrow-bend-up-left"></i><span>' + __('Send back') + '</span></button>' : '';
+		var next = j.next_stage
+			? '<button class="btn btn-primary jb-p-next" data-p-action="move" data-stage="' + jb_esc(j.next_stage) + '"' + (j.gate_block ? ' disabled' : '') + '>' +
+				__('Hand over to {0}', [jb_esc(j.next_stage)]) + ' <i class="ph ph-arrow-right"></i></button>' : '';
+		return '<footer class="jb-p-foot">' + gate + '<div class="jb-p-foot-row">' + back + next + '</div></footer>';
+	}
+
+	// ---- Actions ----------------------------------------------------------
+
+	add_drawing() {
+		var me = this;
+		var live = this.job.drawings.filter(function(d) { return d.status !== 'Superseded'; });
+		var last = live[live.length - 1] || this.job.drawings[this.job.drawings.length - 1] || {};
+		var dialog = new frappe.ui.Dialog({
+			title: __('New drawing revision for {0}', [this.job.name]),
+			fields: [
+				{ fieldname: 'drawing_no', fieldtype: 'Data', label: __('Drawing No'), reqd: 1,
+				  default: last.drawing_no || ('GA-' + this.job.name.replace(/\D/g, '') + '-01') },
+				{ fieldname: 'revision', fieldtype: 'Data', label: __('Revision'), reqd: 1,
+				  default: last.revision ? jb_next_rev(last.revision) : 'A' },
+				{ fieldname: 'title', fieldtype: 'Data', label: __('Title'), default: last.title || '' },
+				{ fieldname: 'file', fieldtype: 'Attach', label: __('Drawing file') }
+			],
+			primary_action_label: __('Add Revision'),
+			primary_action: function(v) {
+				dialog.hide();
+				me.act('add_drawing', { drawing_no: v.drawing_no, revision: v.revision, title: v.title, file_url: v.file });
+			}
+		});
+		dialog.show();
+	}
+
+	reassign() {
+		var me = this;
+		var stage = this.job.stage;
+		var dialog = new frappe.ui.Dialog({
+			title: __('Who has {0}?', [this.job.name]),
+			fields: [{
+				fieldname: 'owner', fieldtype: 'Link', options: 'User', label: __('Responsible'), default: this.job.owner || '',
+				get_query: function() { return { query: 'nest_projects.api.stage_users', filters: { stage: stage } }; }
+			}],
+			primary_action_label: __('Save'),
+			primary_action: function(v) {
+				dialog.hide();
+				me.board.assign({ name: me.job.name, job_owner: me.job.owner }, v.owner || '');
+			}
+		});
+		dialog.show();
+	}
+
+	bind() {
+		var me = this;
+		var $p = this.$panel;
+
+		this.$el.on('click', '.jb-panel-backdrop', function() { me.close(); });
+		$(document).on('keydown.jbpanel', function(e) {
+			if (e.key === 'Escape' && me.name && !$('.modal:visible').length) me.close();
+		});
+
+		$p.on('click', '[data-p-work]', function() {
+			frappe.call({
+				method: 'nest_projects.api.set_work_status',
+				args: { project: me.name, status: $(this).attr('data-p-work') },
+				callback: function() { me.load(); me.board.refresh(); }
+			});
+		});
+
+		$p.on('click', '[data-p-action]', function(e) {
+			var $b = $(this);
+			var action = $b.attr('data-p-action');
+			var row = $b.attr('data-row');
+			e.preventDefault();
+			if (action === 'close') {
+				me.close();
+			} else if (action === 'blocker-edit') {
+				me.editing_blocker = true;
+				me.render();
+				$p.find('#jb-p-blocker').trigger('focus');
+			} else if (action === 'blocker-cancel') {
+				me.editing_blocker = false;
+				me.render();
+			} else if (action === 'blocker-save') {
+				var text = ($p.find('#jb-p-blocker').val() || '').trim();
+				if (!text) {
+					frappe.show_alert({ message: __('Say what is holding it up.'), indicator: 'orange' });
+					return;
+				}
+				me.editing_blocker = false;
+				me.act('set_blocker', { text: text });
+			} else if (action === 'blocker-clear') {
+				me.act('set_blocker', { text: '' });
+			} else if (action === 'drawing-status') {
+				me.act('set_drawing_status', { row: row, status: $b.attr('data-status') });
+			} else if (action === 'drawing-add') {
+				me.add_drawing();
+			} else if (action === 'material') {
+				me.act('set_material_status', { row: row, status: $b.attr('data-status') });
+			} else if (action === 'check') {
+				me.act('set_check', { row: row, done: $b.attr('data-done') });
+			} else if (action === 'invoiced') {
+				frappe.prompt(
+					[{ fieldname: 'ref', fieldtype: 'Data', label: __('Sage invoice number'), description: __('Optional. For reference only.') }],
+					function(v) { me.act('mark_invoiced', { row: row, invoice_ref: v.ref }); },
+					__('Mark as invoiced'), __('Save')
+				);
+			} else if (action === 'reassign') {
+				me.reassign();
+			} else if (action === 'move') {
+				me.board.open_move({ name: me.job.name, job_stage: me.job.stage }, $b.attr('data-stage'));
+			}
 		});
 	}
 }

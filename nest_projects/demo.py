@@ -462,10 +462,10 @@ def save_drawing(project, row, drawn_by):
 
 
 def drawing_svg(project, row, drawn_by):
-	"""A plausible A3 general-arrangement sheet with a real title block."""
+	"""A plausible A3 general-arrangement sheet with a real title block.
+
+	No approval stamp: the status changes on the board, so the viewer shows it live."""
 	esc = frappe.utils.escape_html
-	status = "FOR APPROVAL" if row.status == "Sent for Approval" else row.status.upper()
-	stamp_colour = {"APPROVED": "#16a34a", "FOR APPROVAL": "#d97706", "SUPERSEDED": "#dc2626"}.get(status, "#64748b")
 	return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1190 842" font-family="Arial, Helvetica, sans-serif">
 <rect width="1190" height="842" fill="#ffffff"/>
 <rect x="20" y="20" width="1150" height="802" fill="none" stroke="#1f2937" stroke-width="3"/>
@@ -507,10 +507,6 @@ def drawing_svg(project, row, drawn_by):
  <text x="12" y="146" font-size="10" fill="#64748b">DRAWN</text><text x="12" y="161">{esc(drawn_by)}</text>
  <text x="212" y="146" font-size="10" fill="#64748b">SHEET</text><text x="212" y="161">A3 1/1</text>
  <text x="312" y="146" font-size="10" fill="#64748b">DATE</text><text x="312" y="161">{frappe.utils.formatdate(today())}</text>
-</g>
-<g transform="translate(60 690) rotate(-8)">
- <rect width="250" height="64" rx="8" fill="none" stroke="{stamp_colour}" stroke-width="4"/>
- <text x="125" y="42" font-size="26" font-weight="bold" text-anchor="middle" fill="{stamp_colour}">{status}</text>
 </g>
 </svg>"""
 

@@ -12,7 +12,7 @@ DEFAULT_STAGES = [
 	{"stage_name": "Procurement", "color": "Orange"},
 	{"stage_name": "Production", "color": "Teal"},
 	{"stage_name": "QC / FAT", "color": "Pink", "gate": "QC checks complete"},
-	{"stage_name": "Customer Ready", "color": "Green"},
+	{"stage_name": "Customer Ready", "color": "Green", "gate": "Ready checks complete"},
 	{"stage_name": "Invoiced", "color": "Gray", "is_closed": 1},
 ]
 
@@ -139,10 +139,24 @@ CUSTOM_FIELDS = {
 			"insert_after": "job_qc_section",
 		},
 		{
+			"fieldname": "job_ready_section",
+			"label": "Customer Ready Checks",
+			"fieldtype": "Section Break",
+			"insert_after": "job_qc_checks",
+			"description": "Built from the Order Face ticks when the quote is won (packaging, delivery, installation, safety file, sub-contractor).",
+		},
+		{
+			"fieldname": "job_ready_checks",
+			"label": "Checks",
+			"fieldtype": "Table",
+			"options": "Job Ready Check",
+			"insert_after": "job_ready_section",
+		},
+		{
 			"fieldname": "job_milestones_section",
 			"label": "Payment Milestones",
 			"fieldtype": "Section Break",
-			"insert_after": "job_qc_checks",
+			"insert_after": "job_ready_checks",
 		},
 		{
 			"fieldname": "job_milestones",

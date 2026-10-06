@@ -53,7 +53,9 @@ def get_board():
 		"users": users,
 		"me": frappe.session.user,
 		"today": today(),
-		"can_demo": "System Manager" in frappe.get_roles(),
+		# A Projects Manager can load the demo (the live opening); only a System Manager clears it.
+		"can_demo": bool({"System Manager", "Projects Manager"} & set(frappe.get_roles())),
+		"can_remove_demo": "System Manager" in frappe.get_roles(),
 		"has_demo": bool(frappe.db.exists("Project", {"job_is_demo": 1})),
 	}
 
@@ -144,6 +146,7 @@ def attach_summaries(jobs, stages):
 	drawings = child_rows("Job Drawing", names, ["drawing_no", "revision", "status"])
 	materials = child_rows("Job Material", names, ["status"])
 	checks = child_rows("Job QC Check", names, ["done"])
+	ready_checks = child_rows("Job Ready Check", names, ["done"])
 	milestones = child_rows("Job Milestone", names, ["label", "percent", "due_at_stage", "invoiced"])
 
 	for job in jobs:
@@ -169,6 +172,8 @@ def attach_summaries(jobs, stages):
 
 		qc = checks.get(job.name, [])
 		job.qc = {"total": len(qc), "done": sum(1 for c in qc if c.done)}
+		rc = ready_checks.get(job.name, [])
+		job.ready = {"total": len(rc), "done": sum(1 for c in rc if c.done)}
 
 		# A milestone is ready to invoice once the job has left the stage it is tied to.
 		here = sequence.get(job.job_stage, 0)

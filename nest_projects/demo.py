@@ -10,11 +10,56 @@ from frappe import _
 from frappe.custom.doctype.property_setter.property_setter import make_property_setter
 from frappe.model.naming import NamingSeries
 from frappe.desk.doctype.notification_settings.notification_settings import create_notification_settings
-from frappe.utils import add_days, add_to_date, get_datetime, today
+from frappe.utils import add_days, add_to_date, get_datetime, now_datetime, today
+
+from nest_projects.jobs import READY_GATE, default_company, ensure_customer
+from nest_projects.quotes import ALWAYS_READY, ORDER_FACE
 
 DOMAIN = "acme-demo.test"
 SERIES = "JOB-.###"
 LAST_DEMO_NO = 355
+QUOTE_SERIES = "AT.####"
+LAST_DEMO_QUOTE = 1429
+LOADED_KEY = "nest_projects_demo_loaded_on"
+
+# Their August sales register (already anonymised by them): quote, rep, customer,
+# description, value incl VAT, and the Lost reason where it was lost.
+REGISTER = [
+	("AT1387", "jason", "SONOR", "GR Rotating Assemblies & Wear Plates", 757735.36, "Price"),
+	("AT1388", "jason", "PQRTQSS", "Mechanical Front Raked Screen incl Catchment Box and Screw Conveyor", 340188.60, None),
+	("AT1390", "paul", "ADCTstef Stocks", "Primary Lift Station (AFZAM35015) - request for details", 656937.50, "Went with a competitor"),
+	("AT1392", "paul", "WEBlibanzi Group", "Sluice gate", 87112.50, None),
+	("AT1393", "jason", "CDESCr Construction", "Impala Refineries New PMR Pond", None, None),
+	("AT1395", "jason", "QuORDax 2022 cc", "Clarifier Centre Bearing", 10252.25, None),
+	("AT1396", "paul", "WERTon", "Augmentation of the James Kleynhans Water Treatment Works - Phase 2", 255156.25, None),
+	("AT1397", "paul", "WASWEcrozone", "Belfast WWTW", None, None),
+	("AT1398", "jason", "ABVS - RC Nkosi", "5 Ring Collectors", 15426.43, "Price"),
+	("AT1399", "paul", "KlRES Engineering", "WWTP Turnkey EPC, Canway eManzimtoti", None, None),
+	("AT1401", "paul", "JHGTS", "Manual Screen", None, "Project cancelled or on hold"),
+	("AT1404", "paul", "LKLIOnane", "Hartswater WTW", None, None),
+	("AT1405", "me", "WBYSumisa", "All Saints WWTW Telescopic Valve", 94705.88, None),
+	("AT1406", "paul", "HYPERoEquip", "Sluice gates", None, "No response"),
+	("AT1407", "paul", "HWISE latona", "Nyakallong WWTW Refurbishment - Vaal Central", 1250000.00, None),
+	("AT1408", "paul", "IPOIN", "Enquiry - details to follow", None, None),
+	("AT1409", "jason", "LeanVA 987 Solutions", "Installation and Transport, Bakenpark Ext 6 & 7 Pump Stations", 249437.88, None),
+	("AT1410", "jason", "LeanVA 987 Solutions", "Bakenpark Ext 6 & 7 MCCs", 1312036.08, None),
+	("AT1411", "jason", "Lumpsoespec", "Ferrobanks De-gritting Pipe Work", 217333.94, None),
+	("AT1412", "jason", "InWERTo", "Tender 32Q/2026/27 Rietvlei", 33017685.92, None),
+	("AT1414", "jason", "WERTQtax 202 cc", "Nyakallong Allanridge WWTW Tender", 6958271.28, None),
+	("AT1415", "jason", "Apex Civils", "2 x Handstops", 18460.85, None),
+	("AT1416", "jason", "WetESspec", "Vortex De-gritter", None, None),
+	("AT1418", "paul", "PORESlient Engineering", "Enquiry - details to follow", None, None),
+	("AT1419", "jason", "Lumpsopr Spec", "Siyandani Pipe Work", 129770.72, None),
+	("AT1420", "paul", "DASwacon", "Tender JGDM2026/27-002 Nqanqarhu Water Treatment Works Upgrade", 320139.50, None),
+]
+
+# Quotes that became the demo jobs: quote no -> (job no, rep, value incl VAT).
+WON = {
+	"AT1403": (345, "me", 41400.00), "AT1417": (346, "jason", 77334.66), "AT1402": (347, "paul", 629625.00),
+	"AT1429": (348, "jason", 389289.38), "AT1379": (349, "paul", 25787.92), "AT1413": (350, "paul", 2304207.32),
+	"AT965 Rev4": (351, "carla", 477422.50), "AT1391": (352, "jason", 242757.92), "AT1400": (353, "paul", 1337306.25),
+	"AT1394": (354, "jason", 222786.63), "AT1389": (355, "paul", 543750.00),
+}
 
 # key: (first name, last name, role in the story)
 PEOPLE = {
@@ -62,6 +107,7 @@ JOBS = [
 				 ("Production", "werner", 22), ("QC / FAT", "sipho", 14), ("Customer Ready", "me", 11),
 				 ("Invoiced", None, 8, "Delivered and invoiced in Sage")],
 		"scope": "Supply and install four galvanised access ladders with safety cages.",
+		"ready": ["packaging", "delivery", "installation"], "ready_done": 4,
 	},
 	{
 		"no": 346, "title": "Kareeberg Hand Screen", "customer": "Ban Wrence", "site": "Kareeberg WWTW",
@@ -74,6 +120,7 @@ JOBS = [
 				 ("Production", "werner", 12), ("QC / FAT", "sipho", 6),
 				 ("Customer Ready", "me", 2, "FAT passed. Ready for collection.")],
 		"scope": "Manual bar screen, 316 stainless, 25 mm spacing, with rake.",
+		"ready": ["packaging", "delivery"], "ready_done": 1,
 	},
 	{
 		"no": 347, "title": "Clarifier Bridge Refurbishment", "customer": "Wythe Municipal",
@@ -114,7 +161,7 @@ JOBS = [
 	},
 	{
 		"no": 350, "title": "Phalaphala Aerators Refurbishment", "customer": "Lumpspec Consultants",
-		"site": "Site Alpha", "quote": "QUOTE-1413", "po": "PO-1074", "due": 5, "owner": "paul", "working": 1,
+		"site": "Site Alpha", "quote": "AT1413", "po": "PO-1074", "due": 5, "owner": "paul", "working": 1,
 		"priority": "High", "blocker": "Awaiting customer drawing approval (Rev B sent)",
 		"drawings": [("GA-350-01", "A", "Aerator general arrangement", "Superseded", None),
 					 ("GA-350-01", "B", "Aerator general arrangement", "Sent for Approval", None),
@@ -128,6 +175,7 @@ JOBS = [
 		"path": [("Order", "me", 12, "PO-1074 received, linked to QUOTE-1413"), ("Engineering", "paul", 11),
 				 ("Drawing Approval", "paul", 2, "Rev B sent to client for approval")],
 		"scope": "Wastewater equipment refurbishment: overhaul four surface aerators, new rotor shafts and couplings.",
+		"ready": ["packaging", "delivery", "installation", "safety_file"],
 	},
 	{
 		"no": 351, "title": "Distell Screen in a Sump", "customer": "Lower Tech Processing", "site": "Distell Plant",
@@ -146,7 +194,7 @@ JOBS = [
 	},
 	{
 		"no": 353, "title": "Telescopic Valve", "customer": "Erdem Construction", "site": "All Saints WWTW",
-		"quote": "AT1405", "po": "EC-1190", "due": 2, "owner": "sipho", "working": 1,
+		"quote": "AT1400", "po": "EC-1190", "due": 2, "owner": "sipho", "working": 1,
 		"drawings": [("GA-353-01", "B", "Telescopic valve general arrangement", "Approved", 21)],
 		"materials": [("Telescopic tube 316", 1, "Received"), ("Headstock and spindle", 1, "Received")],
 		"qc": FAT_CHECKS, "qc_done": 4,
@@ -155,6 +203,7 @@ JOBS = [
 		"path": [("Order", "me", 30), ("Engineering", "jason", 28), ("Drawing Approval", "jason", 21),
 				 ("Procurement", "thandi", 17), ("Production", "werner", 10), ("QC / FAT", "sipho", 1)],
 		"scope": "Telescopic decant valve, 300 mm, with headstock.",
+		"ready": ["packaging", "delivery", "safety_file"],
 	},
 	{
 		"no": 354, "title": "Archimedes Screw Pump Bearings", "customer": "Websonga", "site": "Site Delta",
@@ -176,7 +225,17 @@ JOBS = [
 
 @frappe.whitelist()
 def load_demo():
-	frappe.only_for("System Manager")
+	"""Loads as Administrator so a Projects Manager demo login can run it live; the presenter is still "me"."""
+	frappe.only_for(["System Manager", "Projects Manager"])
+	me = frappe.session.user
+	frappe.set_user("Administrator")
+	try:
+		return _load(me)
+	finally:
+		frappe.set_user(me)
+
+
+def _load(me):
 	if frappe.db.exists("Project", {"job_is_demo": 1}):
 		frappe.throw(_("The demo jobs are already loaded. Remove them first."))
 	needed = {step[0] for job in JOBS for step in job["path"]}
@@ -188,7 +247,7 @@ def load_demo():
 		frappe.throw(_("These projects already exist: {0}").format(", ".join(taken)))
 	company = default_company()
 
-	users = {"me": frappe.session.user}
+	users = {"me": me}
 	for key, (first, last, _role) in PEOPLE.items():
 		users[key] = ensure_user(key, first, last)
 	customers = {name: ensure_customer(name) for name in {j["customer"] for j in JOBS}}
@@ -197,17 +256,40 @@ def load_demo():
 		if not frappe.db.get_value("Job Stage", stage, "default_owner"):
 			frappe.db.set_value("Job Stage", stage, "default_owner", users[key])
 
+	if not frappe.db.get_value("Job Stage", "Customer Ready", "gate"):
+		frappe.db.set_value("Job Stage", "Customer Ready", "gate", READY_GATE)
+
 	for job in JOBS:
 		make_job(job, users, customers, company)
+	make_quotes(users, customers)
 
 	use_job_numbers()
-	return {"jobs": len(JOBS), "people": len(PEOPLE)}
+	# Anything created after this moment is test data the broom also clears.
+	frappe.db.set_default(LOADED_KEY, str(now_datetime()))
+	return {"jobs": len(JOBS), "quotes": len(REGISTER) + len(WON), "people": len(PEOPLE)}
+
+
+def is_loaded():
+	return bool(frappe.db.exists("Project", {"job_is_demo": 1}))
 
 
 @frappe.whitelist()
 def remove_demo():
 	frappe.only_for("System Manager")
-	names = frappe.get_all("Project", filters={"job_is_demo": 1}, pluck="name")
+	loaded_on = frappe.db.get_default(LOADED_KEY)
+	since = [["creation", ">=", loaded_on]] if loaded_on else None
+
+	# Quotes first (they link to the jobs): the demo set, and any raised while testing.
+	quotes = set(frappe.get_all("Job Quote", filters={"is_demo": 1}, pluck="name"))
+	if since:
+		quotes |= set(frappe.get_all("Job Quote", filters=since, pluck="name"))
+	for name in quotes:
+		frappe.delete_doc("Job Quote", name, ignore_permissions=True, force=True)
+
+	names = set(frappe.get_all("Project", filters={"job_is_demo": 1}, pluck="name"))
+	if since:
+		names |= set(frappe.get_all("Project", filters=since + [["job_stage", "is", "set"]], pluck="name"))
+	names = list(names)
 	for name in names:
 		frappe.delete_doc("Project", name, ignore_permissions=True, force=True)
 	if names:
@@ -230,15 +312,57 @@ def remove_demo():
 			frappe.db.set_value("User", email, "enabled", 0)
 			kept.append(email)
 
-	for title in {j["customer"] for j in JOBS}:
-		name = frappe.db.get_value("Customer", {"customer_name": title})
-		if not name:
-			continue
+	customers = {frappe.db.get_value("Customer", {"customer_name": t}) for t in {j["customer"] for j in JOBS}}
+	if since:
+		customers |= set(frappe.get_all("Customer", filters=since, pluck="name"))
+	for name in filter(None, customers):
 		try:
 			frappe.delete_doc("Customer", name, ignore_permissions=True)
 		except frappe.LinkExistsError:
 			kept.append(name)
-	return {"jobs": len(names), "kept": kept}
+
+	# Numbering picks up where real records end, so a reload starts at JOB-356 / AT1430 again.
+	reset_series(SERIES, "Project", "JOB-")
+	reset_series(QUOTE_SERIES, "Job Quote", "AT")
+	frappe.db.set_default(LOADED_KEY, "")
+	return {"jobs": len(names), "quotes": len(quotes), "kept": kept}
+
+
+def reset_series(series, doctype, prefix):
+	highest = 0
+	for name in frappe.get_all(doctype, filters={"name": ["like", f"{prefix}%"]}, pluck="name"):
+		digits = name[len(prefix):]
+		if digits.isdigit():
+			highest = max(highest, int(digits))
+	NamingSeries(series).update_counter(highest)
+
+
+def make_quotes(users, customers):
+	"""Their register as Job Quotes: open ones spread over the last six weeks, won ones before their job."""
+	last = len(REGISTER) - 1
+	for i, (no, rep, customer, description, amount, lost) in enumerate(REGISTER):
+		quote_date = add_days(today(), -round(46 - i * 45 / last))
+		insert_quote(no, {
+			"customer_name": customer, "description": description, "amount": amount,
+			"rep": users[rep], "quote_date": quote_date,
+			"status": "Lost" if lost else "Open", "lost_reason": lost,
+			"follow_up_on": None if lost else add_days(quote_date, 10),
+		})
+	jobs = {j["no"]: j for j in JOBS}
+	for no, (job_no, rep, amount) in WON.items():
+		job = jobs[job_no]
+		ordered = job["path"][0][2]
+		insert_quote(no, {
+			"customer_name": job["customer"], "customer": customers.get(job["customer"]),
+			"description": job["title"], "amount": amount, "rep": users[rep],
+			"quote_date": add_days(today(), -(ordered + 9)), "status": "Won",
+			"project": f"JOB-{job_no}", "won_on": add_days(today(), -ordered),
+		})
+
+
+def insert_quote(no, values):
+	doc = frappe.get_doc({"doctype": "Job Quote", "naming_series": "QT-.####", "is_demo": 1, **values})
+	doc.insert(ignore_permissions=True, set_name=no)
 
 
 def make_job(job, users, customers, company):
@@ -286,6 +410,13 @@ def make_job(job, users, customers, company):
 		doc.append("job_qc_checks", {
 			"check": check, "done": int(done),
 			"done_by": users["sipho"] if done else None, "done_on": stamp(1) if done else None,
+		})
+	ready_text = dict(ORDER_FACE)
+	for i, check in enumerate([ready_text[k] for k in job.get("ready", ["delivery"])] + [ALWAYS_READY]):
+		done = i < job.get("ready_done", 0)
+		doc.append("job_ready_checks", {
+			"check": check, "done": int(done),
+			"done_by": users["me"] if done else None, "done_on": stamp(1) if done else None,
 		})
 	for row in job.get("milestones", []):
 		label, percent, due_at = row[0], row[1], row[2]
@@ -385,13 +516,17 @@ def drawing_svg(project, row, drawn_by):
 
 
 def use_job_numbers():
-	"""New projects continue the demo's numbering (JOB-356 onwards)."""
-	make_property_setter("Project", "naming_series", "options", f"{SERIES}\nPROJ-.####", "Text", validate_fields_for_doctype=False)
-	make_property_setter("Project", "naming_series", "default", SERIES, "Text", validate_fields_for_doctype=False)
-	series = NamingSeries(SERIES)
-	if (series.get_current_value() or 0) < LAST_DEMO_NO:
-		series.update_counter(LAST_DEMO_NO)
-	frappe.clear_cache(doctype="Project")
+	"""New projects and quotes continue the demo numbering (JOB-356 and AT1430 onwards)."""
+	for doctype, series, others, last in (
+		("Project", SERIES, "PROJ-.####", LAST_DEMO_NO),
+		("Job Quote", QUOTE_SERIES, "QT-.####", LAST_DEMO_QUOTE),
+	):
+		make_property_setter(doctype, "naming_series", "options", f"{series}\n{others}", "Text", validate_fields_for_doctype=False)
+		make_property_setter(doctype, "naming_series", "default", series, "Text", validate_fields_for_doctype=False)
+		counter = NamingSeries(series)
+		if (counter.get_current_value() or 0) < last:
+			counter.update_counter(last)
+		frappe.clear_cache(doctype=doctype)
 
 
 def ensure_user(key, first, last):
@@ -415,42 +550,6 @@ def ensure_user(key, first, last):
 		create_notification_settings(email)
 	frappe.db.set_value("Notification Settings", email, "enable_email_notifications", 0)
 	return email
-
-
-def ensure_customer(title):
-	name = frappe.db.get_value("Customer", {"customer_name": title})
-	if name:
-		return name
-	group = frappe.db.get_single_value("Selling Settings", "customer_group") or frappe.db.get_value(
-		"Customer Group", {"is_group": 0}
-	)
-	territory = frappe.db.get_single_value("Selling Settings", "territory") or frappe.db.get_value(
-		"Territory", {"is_group": 0}
-	)
-	return (
-		frappe.get_doc(
-			{
-				"doctype": "Customer",
-				"customer_name": title,
-				"customer_type": "Company",
-				"customer_group": group,
-				"territory": territory,
-			}
-		)
-		.insert(ignore_permissions=True)
-		.name
-	)
-
-
-def default_company():
-	company = (
-		frappe.defaults.get_user_default("Company")
-		or frappe.db.get_single_value("Global Defaults", "default_company")
-		or frappe.db.get_value("Company", {}, "name")
-	)
-	if not company:
-		frappe.throw(_("Create a Company before loading the demo."))
-	return company
 
 
 def demo_email(key):

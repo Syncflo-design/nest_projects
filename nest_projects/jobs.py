@@ -10,6 +10,8 @@ from frappe.utils import now_datetime, today
 
 DRAWING_GATE = "Drawing approved"
 QC_GATE = "QC checks complete"
+READY_GATE = "Ready checks complete"
+CHECK_TABLES = ("job_qc_checks", "job_ready_checks")
 
 
 def validate_project(doc, method=None):
@@ -67,14 +69,15 @@ def notify_owner(doc, method=None):
 
 
 def stamp_checks(doc):
-	"""Who ticked a QC check and when; when a drawing was approved."""
-	for row in doc.get("job_qc_checks") or []:
-		if row.done and not row.done_by:
-			row.done_by = frappe.session.user
-			row.done_on = now_datetime()
-		elif not row.done:
-			row.done_by = None
-			row.done_on = None
+	"""Who ticked a QC or ready check and when; when a drawing was approved."""
+	for table in CHECK_TABLES:
+		for row in doc.get(table) or []:
+			if row.done and not row.done_by:
+				row.done_by = frappe.session.user
+				row.done_on = now_datetime()
+			elif not row.done:
+				row.done_by = None
+				row.done_on = None
 	for row in doc.get("job_drawings") or []:
 		if row.status == "Approved" and not row.approved_on:
 			row.approved_on = today()
@@ -105,11 +108,52 @@ def gate_failure(doc, gate):
 		if any(d.status == "Approved" for d in doc.get("job_drawings") or []):
 			return None
 		return _("no drawing has been approved by the customer.")
-	if gate == QC_GATE:
-		checks = doc.get("job_qc_checks") or []
+	if gate in (QC_GATE, READY_GATE):
+		qc = gate == QC_GATE
+		checks = doc.get("job_qc_checks" if qc else "job_ready_checks") or []
 		done = sum(1 for c in checks if c.done)
 		if not checks:
-			return _("no QC checks have been listed.")
+			# No QC listed is a gap; no ready checks just means nothing to arrange.
+			return _("no QC checks have been listed.") if qc else None
 		if done < len(checks):
-			return _("{0} of {1} QC checks are done.").format(done, len(checks))
+			return (_("{0} of {1} QC checks are done.") if qc else _("{0} of {1} customer ready checks are done.")).format(
+				done, len(checks)
+			)
 	return None
+
+
+def default_company():
+	company = (
+		frappe.defaults.get_user_default("Company")
+		or frappe.db.get_single_value("Global Defaults", "default_company")
+		or frappe.db.get_value("Company", {}, "name")
+	)
+	if not company:
+		frappe.throw(_("Create a Company first."))
+	return company
+
+
+def ensure_customer(title):
+	"""The Customer with this name, created if there isn't one."""
+	name = frappe.db.get_value("Customer", {"customer_name": title})
+	if name:
+		return name
+	group = frappe.db.get_single_value("Selling Settings", "customer_group") or frappe.db.get_value(
+		"Customer Group", {"is_group": 0}
+	)
+	territory = frappe.db.get_single_value("Selling Settings", "territory") or frappe.db.get_value(
+		"Territory", {"is_group": 0}
+	)
+	return (
+		frappe.get_doc(
+			{
+				"doctype": "Customer",
+				"customer_name": title,
+				"customer_type": "Company",
+				"customer_group": group,
+				"territory": territory,
+			}
+		)
+		.insert(ignore_permissions=True)
+		.name
+	)

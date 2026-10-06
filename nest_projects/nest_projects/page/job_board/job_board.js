@@ -7,7 +7,7 @@
 frappe.pages['job-board'].on_page_load = function(wrapper) {
 	var page = frappe.ui.make_app_page({ parent: wrapper, title: __('Job Board'), single_column: true });
 
-	var BUILD_MARKER = 'v0.0.5-2026-10-06-job-panel';
+	var BUILD_MARKER = 'v0.0.6-2026-10-06-quotes';
 	console.log('Job Board loaded:', BUILD_MARKER);
 
 	[
@@ -78,7 +78,15 @@ class JobBoard {
 		this.refresh_timer = null;
 		// By Stage or By Person, remembered per browser.
 		this.view = 'stage';
-		try { if (localStorage.getItem(JB_VIEW_KEY) === 'person') this.view = 'person'; } catch (e) { /* storage blocked */ }
+		this.qfilter = 'open';
+		this.qdata = null;
+		try {
+			var saved = localStorage.getItem(JB_VIEW_KEY);
+			if (saved === 'person' || saved === 'quotes') this.view = saved;
+		} catch (e) { /* storage blocked */ }
+		// A link can open a given view: /desk/job-board?view=quotes (Nest Home tiles use this).
+		var asked = new URLSearchParams(window.location.search).get('view');
+		if (asked === 'stage' || asked === 'person' || asked === 'quotes') this.view = asked;
 
 		// v16: page.body is jQuery; create our own container (gotcha 2026-05-10, Variant 2).
 		this.$main = $('<div class="jb-root"></div>').appendTo(page.body);
@@ -94,10 +102,14 @@ class JobBoard {
 
 	// ---- Data -------------------------------------------------------------
 
+	// The quote register is only fetched while the Quotes view is showing.
 	refresh() {
 		var me = this;
-		return frappe.call({ method: 'nest_projects.api.get_board' }).then(function(r) {
-			me.data = me.prepare(r.message || {});
+		var calls = [frappe.call({ method: 'nest_projects.api.get_board' })];
+		if (this.view === 'quotes') calls.push(frappe.call({ method: 'nest_projects.quotes.get_quotes' }));
+		return Promise.all(calls).then(function(results) {
+			me.data = me.prepare(results[0].message || {});
+			if (results[1]) me.qdata = me.prepare_quotes(results[1].message || {});
 			me.render();
 		});
 	}
@@ -115,8 +127,9 @@ class JobBoard {
 		var me = this;
 		try {
 			frappe.realtime.doctype_subscribe('Project');
+			frappe.realtime.doctype_subscribe('Job Quote');
 			frappe.realtime.on('list_update', function(d) {
-				if (d && d.doctype === 'Project') me.schedule_refresh();
+				if (d && (d.doctype === 'Project' || d.doctype === 'Job Quote')) me.schedule_refresh();
 			});
 		} catch (e) { /* realtime is a nicety; the poll below covers it */ }
 		setInterval(function() { me.schedule_refresh(); }, 60000);
@@ -184,9 +197,11 @@ class JobBoard {
 			'    <div class="jb-views" role="tablist">',
 			'      <button class="jb-view" data-view="stage" role="tab"><i class="ph ph-kanban"></i><span>' + __('By Stage') + '</span></button>',
 			'      <button class="jb-view" data-view="person" role="tab"><i class="ph ph-users-three"></i><span>' + __('By Person') + '</span></button>',
+			'      <button class="jb-view" data-view="quotes" role="tab"><i class="ph ph-clipboard-text"></i><span>' + __('Quotes') + '</span></button>',
 			'    </div>',
 			'    <span class="jb-filter-note" id="jb-filter-note"></span>',
-			'    <button class="jb-iconbtn jb-push" id="jb-demo-remove" title="' + __('Remove demo jobs') + '" style="display:none"><i class="ph ph-broom"></i></button>',
+			'    <button class="btn btn-primary btn-sm jb-newquote" style="display:none"><i class="ph ph-plus"></i> ' + __('New Quote') + '</button>',
+			'    <button class="jb-iconbtn" id="jb-demo-remove" title="' + __('Remove demo jobs') + '" style="display:none"><i class="ph ph-broom"></i></button>',
 			'    <button class="jb-iconbtn" id="jb-refresh" title="' + __('Refresh') + '"><i class="ph ph-arrows-clockwise"></i></button>',
 			'  </div>',
 			'  <div class="jb-stagebar" id="jb-stagebar"></div>',
@@ -195,9 +210,30 @@ class JobBoard {
 		].join('\n'));
 	}
 
+	// Parts of the screen every view shares: the view switch and toolbar buttons.
+	render_chrome() {
+		var me = this;
+		var d = this.data || {};
+		var quotes = this.view === 'quotes';
+		$('.jb-view', this.$main).each(function() {
+			$(this).toggleClass('active', $(this).attr('data-view') === me.view);
+		});
+		$('.jb-newquote', this.$main).toggle(quotes && !!(this.qdata && this.qdata.can_create));
+		$('#jb-demo-remove', this.$main).toggle(!!(d.can_remove_demo && d.has_demo));
+		// The first visible right-hand button pushes the group to the right edge.
+		var $right = $('.jb-newquote, #jb-demo-remove, #jb-refresh', this.$main).removeClass('jb-push');
+		$right.filter(function() { return $(this).css('display') !== 'none'; }).first().addClass('jb-push');
+		$('#jb-q', this.$main).attr('placeholder', quotes ? __('Search quote, customer, description, rep') : __('Search job, customer, site, person'));
+	}
+
 	render() {
 		var d = this.data;
 		var me = this;
+		this.render_chrome();
+		if (this.view === 'quotes') {
+			this.render_quotes();
+			return;
+		}
 		if (!d) return;
 
 		var active = d.jobs.filter(function(j) { return !j.closed; });
@@ -207,9 +243,6 @@ class JobBoard {
 			'<span class="jb-hint-desk">' + (by_person ? __('Drag a card to another person to reassign it.') : __('Drag a card to hand it over.')) + '</span>' +
 			'<span class="jb-hint-phone">' + __('Tap the arrow on a card to hand it over.') + '</span>'
 		);
-		$('.jb-view', this.$main).each(function() {
-			$(this).toggleClass('active', $(this).attr('data-view') === me.view);
-		});
 
 		// Stat tiles: the counts are the filters.
 		var counts = {};
@@ -229,9 +262,6 @@ class JobBoard {
 		$('#jb-filter-note', this.$main).html(this.filter === 'all' ? '' :
 			__('Showing: {0}', [jb_esc(current.label)]) + '<a data-filter="all">' + __('Show all') + '</a>');
 
-		var $remove = $('#jb-demo-remove', this.$main);
-		$remove.toggle(!!(d.can_demo && d.has_demo));
-		$('#jb-refresh', this.$main).toggleClass('jb-push', !$remove.is(':visible'));
 		if (!d.jobs.length) {
 			this.render_welcome();
 			return;
@@ -265,7 +295,7 @@ class JobBoard {
 			'  <div class="jb-welcome-text">' + __('A project appears here as soon as it is given a stage on its Job tab.') + '</div>',
 			this.data.can_demo ? [
 				'  <button class="btn btn-primary jb-demo-load"><i class="ph ph-sparkle"></i> ' + __('Load demo jobs') + '</button>',
-				'  <div class="jb-welcome-note">' + __('Eleven sample engineer-to-order jobs with six people, drawings, materials, QC checks and payment milestones. Remove them again at any time.') + '</div>'
+				'  <div class="jb-welcome-note">' + __('Eleven engineer-to-order jobs, their sales register of 37 quotes, six people, drawings, materials, checks and payment milestones. Remove it all again at any time.') + '</div>'
 			].join('\n') : '',
 			'</div>'
 		].join('\n'));
@@ -287,7 +317,7 @@ class JobBoard {
 
 	remove_demo() {
 		var me = this;
-		frappe.confirm(__('Remove all demo jobs, demo people and demo customers?'), function() {
+		frappe.confirm(__('Remove the demo, and every job, quote and customer created since it was loaded?'), function() {
 			frappe.call({
 				method: 'nest_projects.demo.remove_demo',
 				freeze: true,
@@ -377,6 +407,12 @@ class JobBoard {
 		else if (m.total) tags.push(this.tag('package', __('Materials in'), 'good'));
 		var q = j.qc || {};
 		if (q.total) tags.push(this.tag('check-square', __('QC {0}/{1}', [q.done, q.total]), q.done === q.total ? 'good' : ''));
+		// Customer Ready checks matter once the job reaches a stage gated on them.
+		var r = j.ready || {};
+		var stage = this.data.stage_map[j.job_stage] || {};
+		if (r.total && stage.gate === 'Ready checks complete') {
+			tags.push(this.tag('truck', __('Ready {0}/{1}', [r.done, r.total]), r.done === r.total ? 'good' : 'warn'));
+		}
 		if (j.invoice) {
 			tags.push(this.tag('receipt', __('Invoice {0}%', [j.to_invoice.percent]), 'good', j.to_invoice.labels.join(', ')));
 		}
@@ -486,6 +522,249 @@ class JobBoard {
 
 	// ---- Actions ----------------------------------------------------------
 
+	// ---- Quotes (the sales register) -------------------------------------
+
+	prepare_quotes(q) {
+		q.quotes = q.quotes || [];
+		q.users = q.users || {};
+		q.quotes.forEach(function(x) {
+			x.rep_name = x.rep ? ((q.users[x.rep] || {}).full_name || x.rep) : '';
+			x.due = x.status === 'Open' && !!x.follow_up_on && x.follow_up_on <= q.today;
+			x.search = [x.name, x.customer_name, x.description, x.rep_name, x.project].join(' ').toLowerCase();
+		});
+		return q;
+	}
+
+	money(value, compact) {
+		var currency = (this.qdata && this.qdata.currency) || '';
+		var v = parseFloat(value) || 0;
+		if (compact) {
+			var symbol = typeof get_currency_symbol === 'function' ? (get_currency_symbol(currency) || '') : '';
+			if (v >= 1e6) return symbol + ' ' + (v / 1e6).toFixed(1) + 'M';
+			if (v >= 1e3) return symbol + ' ' + Math.round(v / 1e3) + 'k';
+			return symbol + ' ' + Math.round(v);
+		}
+		return typeof format_currency === 'function' ? format_currency(v, currency, 0) : v.toLocaleString();
+	}
+
+	render_quotes() {
+		var q = this.qdata;
+		var me = this;
+		$('#jb-stagebar', this.$main).html('');
+		if (!q) {
+			$('#jb-sub', this.$main).text(__('Loading quotes...'));
+			$('#jb-stats', this.$main).html('');
+			$('#jb-board', this.$main).html('<div class="jb-empty">' + __('Loading quotes...') + '</div>');
+			return;
+		}
+		var all = q.quotes;
+		var open = all.filter(function(x) { return x.status === 'Open'; });
+		var month = moment(q.today).startOf('month').format('YYYY-MM-DD');
+		var since = moment(q.today).subtract(90, 'days').format('YYYY-MM-DD');
+		var won_month = all.filter(function(x) { return x.status === 'Won' && (x.won_on || '') >= month; });
+		var decided = all.filter(function(x) { return x.status !== 'Open' && (x.quote_date || '') >= since; });
+		var won_recent = decided.filter(function(x) { return x.status === 'Won'; }).length;
+		var sum = function(list) { return list.reduce(function(t, x) { return t + (parseFloat(x.amount) || 0); }, 0); };
+
+		$('#jb-sub', this.$main).html(jb_esc(__('{0} open quotes worth {1}.', [open.length, this.money(sum(open), true)])) + ' ' +
+			'<span class="jb-hint-desk">' + __('Win a quote to create its job in one step.') + '</span>');
+
+		var tiles = [
+			{ key: 'open', n: open.length, label: __('Open Quotes') },
+			{ key: 'open', n: this.money(sum(open), true), label: __('Pipeline'), nofilter: true },
+			{ key: 'due', n: open.filter(function(x) { return x.due; }).length, label: __('Follow Up Now'), tone: 'warn' },
+			{ key: 'won', n: won_month.length, label: __('Won This Month'), tone: 'good' },
+			{ key: 'lost', n: all.filter(function(x) { return x.status === 'Lost'; }).length, label: __('Lost'), tone: 'bad' },
+			{ key: 'all', n: decided.length ? Math.round(won_recent * 100 / decided.length) + '%' : '-', label: __('Win Rate 90 Days'), nofilter: true }
+		];
+		$('#jb-stats', this.$main).html(tiles.map(function(t) {
+			var active = !t.nofilter && me.qfilter === t.key;
+			return [
+				'<button class="jb-stat' + (t.tone ? ' jb-s-' + t.tone : '') + (active ? ' active' : '') + '" data-qfilter="' + t.key + '">',
+				'  <div class="jb-stat-n">' + jb_esc(t.n) + '</div>',
+				'  <div class="jb-stat-l">' + jb_esc(t.label) + '</div>',
+				'</button>'
+			].join('\n');
+		}).join('\n'));
+
+		var labels = { open: __('Open'), due: __('Follow up now'), won: __('Won'), lost: __('Lost'), all: __('All quotes') };
+		$('#jb-filter-note', this.$main).html(this.qfilter === 'open' ? '' :
+			__('Showing: {0}', [jb_esc(labels[this.qfilter])]) + '<a data-qfilter="open">' + __('Show open') + '</a>');
+
+		var filter = this.qfilter;
+		var list = all.filter(function(x) {
+			if (me.query && x.search.indexOf(me.query) === -1) return false;
+			if (filter === 'open') return x.status === 'Open';
+			if (filter === 'due') return x.due;
+			if (filter === 'won') return x.status === 'Won';
+			if (filter === 'lost') return x.status === 'Lost';
+			return true;
+		});
+		if (filter === 'open' || filter === 'due') {
+			// Chase list: the most overdue follow-up first; no follow-up date last.
+			list.sort(function(a, b) {
+				var fa = a.follow_up_on || '9999', fb = b.follow_up_on || '9999';
+				return fa !== fb ? (fa < fb ? -1 : 1) : (a.name < b.name ? 1 : -1);
+			});
+		}
+
+		var head = [
+			'<div class="jb-q-row jb-q-head">',
+			'  <div>' + __('Quote') + '</div><div>' + __('Customer and description') + '</div><div class="jb-q-val">' + __('Value incl VAT') + '</div>',
+			'  <div>' + __('Rep') + '</div><div>' + __('Follow up') + '</div><div>' + __('Status') + '</div><div></div>',
+			'</div>'
+		].join('');
+		var rows = list.map(function(x) { return me.render_quote_row(x); }).join('\n');
+		var empty = '<div class="jb-empty">' + (all.length ? __('No quotes match.') : __('No quotes yet. Add the first one with New Quote.')) + '</div>';
+		var total = list.length ? '<div class="jb-q-total">' + __('{0} quotes', [list.length]) + ' &middot; ' + jb_esc(this.money(sum(list))) + '</div>' : '';
+		$('#jb-board', this.$main).html('<div class="jb-qlist">' + head + (rows || empty) + total + '</div>');
+	}
+
+	render_quote_row(x) {
+		var today = this.qdata.today;
+		var tones = { Open: '', Won: 'good', Lost: 'bad' };
+		var follow = '';
+		if (x.status === 'Open' && x.follow_up_on) {
+			var late = moment(today).diff(moment(x.follow_up_on), 'days');
+			follow = '<span class="jb-q-follow' + (x.due ? ' jb-over' : '') + '" title="' +
+				jb_esc(x.due ? (late ? __('{0} days late', [late]) : __('Today')) : __('Follow up on this date')) + '">' +
+				'<i class="ph ph-phone-call"></i>' + jb_esc(moment(x.follow_up_on).format('D MMM')) + '</span>';
+		}
+		var actions = '';
+		if (x.status === 'Open') {
+			actions = '<button class="btn btn-xs btn-success" data-q-action="win"><i class="ph ph-trophy"></i> ' + __('Won') + '</button>' +
+				'<button class="btn btn-xs btn-default" data-q-action="lose">' + __('Lost') + '</button>';
+		} else if (x.status === 'Won' && x.project) {
+			actions = '<button class="jb-q-job" data-q-action="job" title="' + __('Open the job') + '">' + jb_esc(x.project) + ' <i class="ph ph-arrow-right"></i></button>';
+		} else if (x.status === 'Lost' && x.lost_reason) {
+			actions = '<span class="jb-p-muted">' + jb_esc(x.lost_reason) + '</span>';
+		}
+		var rep = x.rep ? this.avatar_for(x.rep, this.qdata.users) + '<span>' + jb_esc(x.rep_name.split(' ')[0]) + '</span>' : '';
+		return [
+			'<div class="jb-q-row' + (x.due ? ' jb-q-due' : '') + (x.status !== 'Open' ? ' jb-q-closed' : '') + '" data-quote="' + jb_esc(x.name) + '">',
+			'  <div class="jb-q-no"><b>' + jb_esc(x.name) + '</b><span>' + jb_esc(moment(x.quote_date).format('D MMM')) + '</span></div>',
+			'  <div class="jb-q-main"><div class="jb-q-cust">' + jb_esc(x.customer_name) +
+				(x.quote_file ? ' <a href="' + jb_esc(x.quote_file) + '" target="_blank" rel="noopener" class="jb-q-doc" title="' + __('Open quote document') + '"><i class="ph ph-file-text"></i></a>' : '') +
+				'</div><div class="jb-q-desc">' + jb_esc(x.description) + '</div></div>',
+			'  <div class="jb-q-val">' + (x.amount ? jb_esc(this.money(x.amount)) : '<span class="jb-p-muted">' + __('not priced') + '</span>') + '</div>',
+			'  <div class="jb-q-rep">' + rep + '</div>',
+			'  <div class="jb-q-fu">' + follow + '</div>',
+			'  <div class="jb-q-status">' + jb_tag(jb_esc(__(x.status)), tones[x.status]) + '</div>',
+			'  <div class="jb-q-act">' + actions + '</div>',
+			'</div>'
+		].join('\n');
+	}
+
+	avatar_for(user, users) {
+		var u = users[user] || {};
+		var name = u.full_name || user;
+		var face = u.image ? '<img src="' + jb_esc(u.image) + '" alt="">' : jb_esc(jb_initials(name));
+		return '<span class="jb-avatar" style="--jb-av:' + jb_hash_color(user) + '" title="' + jb_esc(name) + '">' + face + '</span>';
+	}
+
+	quote(name) {
+		return ((this.qdata && this.qdata.quotes) || []).filter(function(x) { return x.name === name; })[0];
+	}
+
+	open_quote(x) {
+		var me = this;
+		var today = (this.qdata && this.qdata.today) || frappe.datetime.get_today();
+		var dialog = new frappe.ui.Dialog({
+			title: x ? __('Quote {0}', [x.name]) : __('New Quote'),
+			size: 'large',
+			fields: [
+				{ fieldname: 'customer_name', fieldtype: 'Data', label: __('Customer'), reqd: 1, default: x ? x.customer_name : '' },
+				{ fieldname: 'description', fieldtype: 'Small Text', label: __('Description'), reqd: 1, default: x ? x.description : '' },
+				{ fieldname: 'amount', fieldtype: 'Currency', label: __('Value incl VAT'), default: x ? x.amount : null },
+				{ fieldtype: 'Column Break' },
+				{ fieldname: 'quote_date', fieldtype: 'Date', label: __('Date'), reqd: 1, default: x ? x.quote_date : today },
+				{ fieldname: 'follow_up_on', fieldtype: 'Date', label: __('Follow up on'),
+				  default: x ? x.follow_up_on : moment(today).add(7, 'days').format('YYYY-MM-DD') },
+				{ fieldname: 'rep', fieldtype: 'Link', options: 'User', label: __('Rep'), default: x ? x.rep : frappe.session.user },
+				{ fieldname: 'quote_file', fieldtype: 'Attach', label: __('Quote document'), default: x ? x.quote_file : '' }
+			],
+			primary_action_label: x ? __('Save') : __('Add Quote'),
+			primary_action: function(values) {
+				dialog.hide();
+				frappe.call({
+					method: 'nest_projects.quotes.save_quote',
+					args: { values: values, name: x ? x.name : null },
+					freeze: true,
+					callback: function(r) {
+						frappe.show_alert({ message: __('Quote {0} saved', [r.message]), indicator: 'green' });
+						me.refresh();
+					}
+				});
+			}
+		});
+		dialog.show();
+	}
+
+	open_win(x) {
+		var me = this;
+		var today = this.qdata.today;
+		var face = function(fieldname, label) {
+			return { fieldname: fieldname, fieldtype: 'Check', label: label };
+		};
+		var dialog = new frappe.ui.Dialog({
+			title: __('{0} won: create the job', [x.name]),
+			fields: [
+				{ fieldname: 'po', fieldtype: 'Data', label: __('Customer PO number'), reqd: 1 },
+				{ fieldname: 'due_date', fieldtype: 'Date', label: __('Due date'), default: moment(today).add(42, 'days').format('YYYY-MM-DD') },
+				{ fieldname: 'title', fieldtype: 'Data', label: __('Job title'), default: String(x.description || '').split('\n')[0] },
+				{ fieldtype: 'Section Break', label: __('Order face: this job includes') },
+				face('packaging', __('Packaging')),
+				face('delivery', __('Delivery')),
+				face('installation', __('Installation')),
+				{ fieldtype: 'Column Break' },
+				face('safety_file', __('Safety file')),
+				face('subcontractor', __('Sub-contractor')),
+				{ fieldtype: 'Section Break' },
+				{ fieldname: 'terms', fieldtype: 'HTML', options: '<div class="jb-q-terms"><i class="ph ph-receipt"></i><span>' +
+					__('Payment milestones are added: 20% on order, 30% on drawing approval, 50% on FAT. Invoices are raised in Sage.') +
+					' ' + __('Every ticked item becomes a Customer Ready check on the job.') + '</span></div>' }
+			],
+			primary_action_label: __('Create Job'),
+			primary_action: function(v) {
+				var includes = ['packaging', 'delivery', 'installation', 'safety_file', 'subcontractor'].filter(function(k) { return v[k]; });
+				dialog.hide();
+				frappe.call({
+					method: 'nest_projects.quotes.win_quote',
+					args: { name: x.name, po: v.po, due_date: v.due_date, title: v.title, includes: includes },
+					freeze: true,
+					freeze_message: __('Creating the job...'),
+					callback: function(r) {
+						frappe.show_alert({ message: __('{0} won. Job {1} is on the board.', [x.name, r.message]), indicator: 'green' });
+						// Straight to the new job: on the board, open in the panel.
+						me.view = 'stage';
+						try { localStorage.setItem(JB_VIEW_KEY, 'stage'); } catch (e) { /* storage blocked */ }
+						me.refresh().then(function() { me.panel.open(r.message); });
+					}
+				});
+			}
+		});
+		dialog.show();
+	}
+
+	open_lost(x) {
+		var me = this;
+		frappe.prompt(
+			[{ fieldname: 'reason', fieldtype: 'Select', label: __('Why was it lost?'),
+			   options: ['', __('Price'), __('Lead time'), __('Went with a competitor'), __('Project cancelled or on hold'), __('No response'), __('Other')].join('\n') }],
+			function(v) {
+				frappe.call({
+					method: 'nest_projects.quotes.mark_lost',
+					args: { name: x.name, reason: v.reason },
+					callback: function() {
+						frappe.show_alert({ message: __('{0} marked lost', [x.name]), indicator: 'orange' });
+						me.refresh();
+					}
+				});
+			},
+			__('{0} lost', [x.name]), __('Mark Lost')
+		);
+	}
+
 	job(name) {
 		return (this.data.jobs || []).filter(function(j) { return j.name === name; })[0];
 	}
@@ -570,6 +849,30 @@ class JobBoard {
 			try { localStorage.setItem(JB_VIEW_KEY, me.view); } catch (e) { /* storage blocked */ }
 			me.render();
 			$m.find('#jb-board').scrollLeft(0);
+			if (me.view === 'quotes') me.refresh();
+		});
+
+		// Quotes view.
+		$m.on('click', '[data-qfilter]', function() {
+			me.qfilter = $(this).attr('data-qfilter');
+			me.render();
+		});
+		$m.on('click', '.jb-newquote', function() { me.open_quote(null); });
+		$m.on('click', '.jb-q-doc', function(e) { e.stopPropagation(); });
+		$m.on('click', '.jb-q-row[data-quote]', function() {
+			var x = me.quote($(this).attr('data-quote'));
+			if (!x) return;
+			if (x.status === 'Open') me.open_quote(x);
+			else if (x.status === 'Won' && x.project) me.panel.open(x.project);
+		});
+		$m.on('click', '[data-q-action]', function(e) {
+			e.stopPropagation();
+			var x = me.quote($(this).closest('.jb-q-row').attr('data-quote'));
+			var action = $(this).attr('data-q-action');
+			if (!x) return;
+			if (action === 'win') me.open_win(x);
+			else if (action === 'lose') me.open_lost(x);
+			else if (action === 'job') me.panel.open(x.project);
 		});
 		$m.on('click', '.jb-state[data-work]', function(e) {
 			e.stopPropagation();
@@ -741,7 +1044,7 @@ class JobPanel {
 			'  <div class="jb-p-top"><span class="jb-jobno">' + jb_esc(j.name) + '</span>' +
 				(j.priority === 'High' ? '<i class="ph ph-flag jb-prio" title="' + __('High priority') + '"></i>' : '') +
 				board.render_stage_tag(stage) + '<span class="jb-p-gap"></span>' +
-				'<a class="jb-p-icon" href="/app/project/' + encodeURIComponent(j.name) + '" title="' + __('Open the full record') + '"><i class="ph ph-arrow-square-out"></i></a>' +
+				'<a class="jb-p-icon" href="' + jb_esc(frappe.utils.get_form_link('Project', j.name)) + '" title="' + __('Open the full record') + '"><i class="ph ph-arrow-square-out"></i></a>' +
 				'<button class="jb-p-icon" data-p-action="close" title="' + __('Close') + '"><i class="ph ph-x"></i></button></div>',
 			'  <div class="jb-p-title">' + jb_esc(j.project_name || j.name) + '</div>',
 			where ? '  <div class="jb-card-cust"><i class="ph ph-buildings"></i>' + where + '</div>' : '',
@@ -751,7 +1054,8 @@ class JobPanel {
 			this.render_blocker(),
 			this.render_drawings(),
 			this.render_materials(),
-			this.render_checks(),
+			this.render_checks(j.checks, 'job_qc_checks', 'check-square', __('QC / FAT Checks')),
+			this.render_checks(j.ready_checks, 'job_ready_checks', 'truck', __('Customer Ready Checks')),
 			this.render_milestones(),
 			this.render_history(),
 			'</div>',
@@ -893,26 +1197,28 @@ class JobPanel {
 		return this.section('package', __('Materials'), parts.join(''), '', rows);
 	}
 
-	render_checks() {
+	// A tick-list: QC / FAT checks, or the Customer Ready checks from the Order Face.
+	render_checks(checks, table, icon, title) {
 		var j = this.job;
 		var me = this;
-		if (!j.checks.length) return '';
-		var done = j.checks.filter(function(c) { return c.done; }).length;
-		var pct = Math.round(done * 100 / j.checks.length);
-		var summary = jb_tag(done + ' / ' + j.checks.length, done === j.checks.length ? 'good' : '');
+		checks = checks || [];
+		if (!checks.length) return '';
+		var done = checks.filter(function(c) { return c.done; }).length;
+		var pct = Math.round(done * 100 / checks.length);
+		var summary = jb_tag(done + ' / ' + checks.length, done === checks.length ? 'good' : '');
 		var tagname = j.can_write ? 'button' : 'div';
-		var rows = j.checks.map(function(c) {
+		var rows = checks.map(function(c) {
 			var who = c.done ? '<div class="jb-p-item-sub">' + jb_esc(me.user_name(c.done_by)) + ' &middot; ' + jb_esc(jb_when(c.done_on)) + '</div>' : '';
 			return [
 				'<' + tagname + ' class="jb-p-item jb-p-check' + (c.done ? ' jb-p-done' : '') + '"' +
-					(j.can_write ? ' data-p-action="check" data-row="' + jb_esc(c.name) + '" data-done="' + (c.done ? 0 : 1) + '"' : '') + '>',
+					(j.can_write ? ' data-p-action="check" data-table="' + table + '" data-row="' + jb_esc(c.name) + '" data-done="' + (c.done ? 0 : 1) + '"' : '') + '>',
 				'  <i class="ph ' + (c.done ? 'ph-check-circle' : 'ph-circle') + ' jb-p-tick"></i>',
 				'  <div class="jb-p-grow"><div class="jb-p-item-title">' + jb_esc(c.check) + '</div>' + who + '</div>',
 				'</' + tagname + '>'
 			].join('\n');
 		}).join('\n');
 		var bar = '<div class="jb-p-bar"><span style="width:' + pct + '%"></span></div>';
-		return this.section('check-square', __('QC / FAT Checks'), summary, '', bar + rows);
+		return this.section(icon, title, summary, '', bar + rows);
 	}
 
 	render_milestones() {
@@ -1067,7 +1373,7 @@ class JobPanel {
 			} else if (action === 'material') {
 				me.act('set_material_status', { row: row, status: $b.attr('data-status') });
 			} else if (action === 'check') {
-				me.act('set_check', { row: row, done: $b.attr('data-done') });
+				me.act('set_check', { row: row, done: $b.attr('data-done'), table: $b.attr('data-table') });
 			} else if (action === 'invoiced') {
 				frappe.prompt(
 					[{ fieldname: 'ref', fieldtype: 'Data', label: __('Sage invoice number'), description: __('Optional. For reference only.') }],

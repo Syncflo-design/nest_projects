@@ -15,6 +15,17 @@ after_migrate = "nest_projects.install.ensure_setup"
 
 # Gates, stage history and handover alerts. On the doc events (not the board
 # API) so a stage changed on the Project form obeys the same rules.
+# Offers the demo jobs to the Nest Demo switch on the demo site (ignored elsewhere).
+nest_demo_loaders = [
+	{
+		"key": "nest_projects",
+		"label": "Engineer-to-order workshop: 11 jobs, 37 quotes, 6 people",
+		"load": "nest_projects.demo.load_demo",
+		"remove": "nest_projects.demo.remove_demo",
+		"is_loaded": "nest_projects.demo.is_loaded",
+	}
+]
+
 doc_events = {
 	"Project": {
 		"validate": "nest_projects.jobs.validate_project",

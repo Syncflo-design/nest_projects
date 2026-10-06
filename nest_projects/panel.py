@@ -7,7 +7,7 @@ on the form) and returns the refreshed job, so the panel redraws in one trip.
 import frappe
 from frappe import _
 
-from nest_projects.jobs import gate_failure
+from nest_projects.jobs import CHECK_TABLES, gate_failure
 
 DRAWING_STATUSES = ("Draft", "Sent for Approval", "Approved", "Superseded")
 MATERIAL_STATUSES = ("In Stock", "To Order", "Ordered", "Received")
@@ -64,9 +64,12 @@ def set_material_status(project, row, status):
 
 
 @frappe.whitelist()
-def set_check(project, row, done):
+def set_check(project, row, done, table="job_qc_checks"):
+	"""Ticks a QC / FAT check or a Customer Ready check."""
+	if table not in CHECK_TABLES:
+		frappe.throw(_("Unknown checklist."))
 	doc = writable(project)
-	child(doc, "job_qc_checks", row).done = 1 if frappe.utils.cint(done) else 0
+	child(doc, table, row).done = 1 if frappe.utils.cint(done) else 0
 	return save(doc)
 
 
@@ -90,7 +93,7 @@ def job_payload(doc):
 	previous = stages[here - 1] if here > 0 else None
 
 	people = {doc.job_owner} | {r.to_owner for r in doc.job_stage_log} | {r.moved_by for r in doc.job_stage_log}
-	people |= {r.done_by for r in doc.job_qc_checks}
+	people |= {r.done_by for r in doc.job_qc_checks} | {r.done_by for r in doc.job_ready_checks}
 	users = {
 		u.name: {"full_name": u.full_name or u.name, "image": u.user_image}
 		for u in frappe.get_all(
@@ -120,6 +123,7 @@ def job_payload(doc):
 		"drawings": rows("job_drawings", ["drawing_no", "revision", "title", "file", "status", "approved_on"]),
 		"materials": rows("job_materials", ["item", "description", "qty", "status", "expected_on"]),
 		"checks": rows("job_qc_checks", ["check", "done", "done_by", "done_on", "notes"]),
+		"ready_checks": rows("job_ready_checks", ["check", "done", "done_by", "done_on", "notes"]),
 		"milestones": rows("job_milestones", ["label", "percent", "due_at_stage", "invoiced", "invoice_ref"]),
 		"history": list(reversed(rows("job_stage_log", ["from_stage", "to_stage", "to_owner", "moved_by", "moved_on", "note"]))),
 		"next_stage": next_stage.name if next_stage else None,

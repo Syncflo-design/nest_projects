@@ -7,7 +7,7 @@
 frappe.pages['job-board'].on_page_load = function(wrapper) {
 	var page = frappe.ui.make_app_page({ parent: wrapper, title: __('Job Board'), single_column: true });
 
-	var BUILD_MARKER = 'v0.0.10-2026-10-06-handover-any-stage';
+	var BUILD_MARKER = 'v0.0.11-2026-10-06-fold-icon';
 	console.log('Job Board loaded:', BUILD_MARKER);
 
 	[
@@ -497,7 +497,7 @@ class JobBoard {
 			'<div class="jb-col' + (stage.is_closed ? ' jb-closed' : '') + '" data-col="' + jb_esc(stage.name) + '" style="--jb-stage:' + stage.hex + '">',
 			'  <div class="jb-col-head"><span class="jb-dot"></span><span class="jb-col-name">' + jb_esc(stage.name) + '</span>' + gate +
 			'<span class="jb-count">' + jobs.length + '</span>' +
-			'<button class="jb-collapse" data-collapse="' + jb_esc(stage.name) + '" title="' + __('Fold this column') + '"><i class="ph ph-caret-line-left"></i></button></div>',
+			'<button class="jb-collapse" data-collapse="' + jb_esc(stage.name) + '" title="' + __('Fold this column') + '"><i class="ph ph-arrows-in-line-horizontal"></i></button></div>',
 			'  <div class="jb-col-body" data-stage="' + jb_esc(stage.name) + '">' + body + '</div>',
 			'</div>'
 		].join('\n');

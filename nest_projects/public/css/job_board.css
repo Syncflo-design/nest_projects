@@ -180,6 +180,17 @@
 }
 .jb-next:hover { background: var(--jb-stage); border-color: var(--jb-stage); color: #fff; }
 
+/* ---- Empty board --------------------------------------------------------- */
+.jb-welcome {
+  flex: 1; max-width: 560px; margin: 30px auto; padding: 36px 28px; text-align: center;
+  background: var(--jb-card); border: 1px dashed var(--jb-border); border-radius: var(--jb-radius);
+}
+.jb-welcome-icon { font-size: 46px; color: var(--jb-primary); }
+.jb-welcome-title { font-size: 18px; font-weight: 700; margin: 10px 0 6px; }
+.jb-welcome-text { color: var(--jb-muted); font-size: 13.5px; margin-bottom: 18px; }
+.jb-welcome .btn { display: inline-flex; align-items: center; gap: 6px; }
+.jb-welcome-note { color: var(--jb-light); font-size: 12px; margin-top: 12px; line-height: 1.5; }
+
 /* ---- By Person ----------------------------------------------------------- */
 .jb-person .jb-col-head { gap: 10px; padding: 11px 12px 10px; }
 .jb-avatar.jb-avatar-lg { width: 34px; height: 34px; font-size: 13px; }

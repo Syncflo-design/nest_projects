@@ -167,6 +167,15 @@ CUSTOM_FIELDS = {
 			"read_only": 1,
 			"no_copy": 1,
 		},
+		{
+			"fieldname": "job_is_demo",
+			"label": "Demo Job",
+			"fieldtype": "Check",
+			"insert_after": "job_stage_log",
+			"hidden": 1,
+			"read_only": 1,
+			"no_copy": 1,
+		},
 	],
 }
 

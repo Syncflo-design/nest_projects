@@ -7,7 +7,7 @@
 frappe.pages['job-board'].on_page_load = function(wrapper) {
 	var page = frappe.ui.make_app_page({ parent: wrapper, title: __('Job Board'), single_column: true });
 
-	var BUILD_MARKER = 'v0.0.3-2026-10-06-by-person';
+	var BUILD_MARKER = 'v0.0.4-2026-10-06-demo-data';
 	console.log('Job Board loaded:', BUILD_MARKER);
 
 	[
@@ -185,7 +185,8 @@ class JobBoard {
 			'      <button class="jb-view" data-view="person" role="tab"><i class="ph ph-users-three"></i><span>' + __('By Person') + '</span></button>',
 			'    </div>',
 			'    <span class="jb-filter-note" id="jb-filter-note"></span>',
-			'    <button class="jb-iconbtn jb-push" id="jb-refresh" title="' + __('Refresh') + '"><i class="ph ph-arrows-clockwise"></i></button>',
+			'    <button class="jb-iconbtn jb-push" id="jb-demo-remove" title="' + __('Remove demo jobs') + '" style="display:none"><i class="ph ph-broom"></i></button>',
+			'    <button class="jb-iconbtn" id="jb-refresh" title="' + __('Refresh') + '"><i class="ph ph-arrows-clockwise"></i></button>',
 			'  </div>',
 			'  <div class="jb-stagebar" id="jb-stagebar"></div>',
 			'  <div class="jb-board" id="jb-board"></div>',
@@ -227,6 +228,14 @@ class JobBoard {
 		$('#jb-filter-note', this.$main).html(this.filter === 'all' ? '' :
 			__('Showing: {0}', [jb_esc(current.label)]) + '<a data-filter="all">' + __('Show all') + '</a>');
 
+		var $remove = $('#jb-demo-remove', this.$main);
+		$remove.toggle(!!(d.can_demo && d.has_demo));
+		$('#jb-refresh', this.$main).toggleClass('jb-push', !$remove.is(':visible'));
+		if (!d.jobs.length) {
+			this.render_welcome();
+			return;
+		}
+
 		var visible = d.jobs.filter(function(j) { return me.matches(j); });
 		if (by_person) {
 			this.render_people(visible);
@@ -243,6 +252,55 @@ class JobBoard {
 		$('#jb-board', this.$main).html(d.stages.map(function(s) {
 			return me.render_column(s, by_stage[s.name] || []);
 		}).join('\n'));
+	}
+
+	// Nothing on the board yet: say how jobs get here, and offer the demo to a System Manager.
+	render_welcome() {
+		$('#jb-stagebar', this.$main).html('');
+		$('#jb-board', this.$main).html([
+			'<div class="jb-welcome">',
+			'  <i class="ph ph-kanban jb-welcome-icon"></i>',
+			'  <div class="jb-welcome-title">' + __('No jobs on the board yet') + '</div>',
+			'  <div class="jb-welcome-text">' + __('A project appears here as soon as it is given a stage on its Job tab.') + '</div>',
+			this.data.can_demo ? [
+				'  <button class="btn btn-primary jb-demo-load"><i class="ph ph-sparkle"></i> ' + __('Load demo jobs') + '</button>',
+				'  <div class="jb-welcome-note">' + __('Eleven sample engineer-to-order jobs with six people, drawings, materials, QC checks and payment milestones. Remove them again at any time.') + '</div>'
+			].join('\n') : '',
+			'</div>'
+		].join('\n'));
+	}
+
+	load_demo() {
+		var me = this;
+		frappe.call({
+			method: 'nest_projects.demo.load_demo',
+			freeze: true,
+			freeze_message: __('Setting up the demo workshop...'),
+			callback: function(r) {
+				var m = r.message || {};
+				frappe.show_alert({ message: __('{0} demo jobs loaded', [m.jobs || 0]), indicator: 'green' });
+				me.refresh();
+			}
+		});
+	}
+
+	remove_demo() {
+		var me = this;
+		frappe.confirm(__('Remove all demo jobs, demo people and demo customers?'), function() {
+			frappe.call({
+				method: 'nest_projects.demo.remove_demo',
+				freeze: true,
+				freeze_message: __('Removing the demo...'),
+				callback: function(r) {
+					var m = r.message || {};
+					frappe.show_alert({ message: __('{0} demo jobs removed', [m.jobs || 0]), indicator: 'green' });
+					if (m.kept && m.kept.length) {
+						frappe.msgprint(__('Kept because other records use them: {0}', [m.kept.join(', ')]));
+					}
+					me.refresh();
+				}
+			});
+		});
 	}
 
 	render_column(stage, jobs) {
@@ -524,6 +582,8 @@ class JobBoard {
 			me.render();
 		}, 150));
 		$m.on('click', '#jb-refresh', function() { me.refresh(); });
+		$m.on('click', '.jb-demo-load', function() { me.load_demo(); });
+		$m.on('click', '#jb-demo-remove', function() { me.remove_demo(); });
 
 		$m.on('click', '[data-goto]', function() {
 			var $col = $m.find('.jb-col[data-col="' + $(this).attr('data-goto') + '"]');

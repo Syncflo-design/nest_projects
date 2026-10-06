@@ -47,7 +47,15 @@ def get_board():
 		):
 			users[u.name] = {"full_name": u.full_name or u.name, "image": u.user_image}
 
-	return {"stages": stages, "jobs": jobs, "users": users, "me": frappe.session.user, "today": today()}
+	return {
+		"stages": stages,
+		"jobs": jobs,
+		"users": users,
+		"me": frappe.session.user,
+		"today": today(),
+		"can_demo": "System Manager" in frappe.get_roles(),
+		"has_demo": bool(frappe.db.exists("Project", {"job_is_demo": 1})),
+	}
 
 
 @frappe.whitelist()

@@ -14,6 +14,9 @@ QC_GATE = "QC checks complete"
 
 def validate_project(doc, method=None):
 	stamp_checks(doc)
+	if doc.flags.get("job_demo_load"):
+		# The demo loader writes its own back-dated history.
+		return
 	before = doc.get_doc_before_save()
 	old_stage = (before.job_stage if before else None) or None
 	old_owner = (before.job_owner if before else None) or None
@@ -44,7 +47,7 @@ def validate_project(doc, method=None):
 def notify_owner(doc, method=None):
 	"""Tells the responsible person a job has landed with them."""
 	owner = doc.job_owner
-	if not owner or owner == frappe.session.user or not doc.job_stage:
+	if not owner or owner == frappe.session.user or not doc.job_stage or doc.flags.get("job_demo_load"):
 		return
 	if not (doc.has_value_changed("job_owner") or doc.has_value_changed("job_stage")):
 		return

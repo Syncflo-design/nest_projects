@@ -7,7 +7,7 @@
 frappe.pages['job-board'].on_page_load = function(wrapper) {
 	var page = frappe.ui.make_app_page({ parent: wrapper, title: __('Job Board'), single_column: true });
 
-	var BUILD_MARKER = 'v0.0.13-2026-10-06-stock-on-site';
+	var BUILD_MARKER = 'v0.0.14-2026-10-07-open-job';
 	console.log('Job Board loaded:', BUILD_MARKER);
 
 	[
@@ -31,6 +31,11 @@ frappe.pages['job-board'].on_page_show = function(wrapper) {
 	var asked = (frappe.get_route() || [])[1];
 	if (asked === 'stage' || asked === 'person' || asked === 'quotes') wrapper.jobBoard.view = asked;
 	wrapper.jobBoard.refresh();
+	// A scanned job card (nest_floor) or a link opens that job: job-board?job=JOB-350.
+	var job = (frappe.route_options && frappe.route_options.job) ||
+		new URLSearchParams(window.location.search).get('job');
+	if (frappe.route_options && frappe.route_options.job) frappe.route_options = null;
+	if (job && job !== wrapper.jobBoard.panel.name) wrapper.jobBoard.panel.open(job);
 };
 
 // ---------------------------------------------------------------------------

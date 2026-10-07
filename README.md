@@ -52,6 +52,8 @@ Project's own customer, priority and expected end date (due date) are used as-is
   engineers. Tiles count what is shown. Each is remembered per browser.
 - On phones the board shows one column per screen with chips to jump.
 - Refreshes itself when any Project changes, and every minute.
+- A link can open one job's panel: `/desk/job-board?job=JOB-350` (the shop
+  floor screens use this when a job card is scanned).
 
 ## Job panel
 
@@ -123,7 +125,10 @@ the customers, drawings with generated A3 GA sheets, materials, FAT checks,
 20/30/50 payment milestones and back-dated stage history. All dates are
 relative to the day it's loaded. It also loads their August sales register
 (26 quotes) plus the 11 quotes that became the jobs. New projects then
-continue as JOB-356 and new quotes as AT1430.
+continue as JOB-356 and new quotes as AT1430. Stock items, three suppliers,
+opening stock and a site store per job come with it; JOB-347 already has goods
+at site (some used), and JOB-349's ordered motor is on a submitted purchase
+order, so a delivery can be booked in live on a phone (nest_floor).
 
 The broom button removes the demo **and every job, quote and customer created
 since it was loaded**, then resets the numbering, so: load, test, broom, and

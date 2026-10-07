@@ -12,7 +12,7 @@ from frappe.model.naming import NamingSeries
 from frappe.desk.doctype.notification_settings.notification_settings import create_notification_settings
 from frappe.utils import add_days, add_to_date, get_datetime, now_datetime, today
 
-from nest_projects import stock
+from nest_projects import purchasing, stock
 from nest_projects.jobs import READY_GATE, default_company, ensure_customer
 from nest_projects.purchasing import default_warehouse
 from nest_projects.quotes import ALWAYS_READY, ORDER_FACE
@@ -79,6 +79,10 @@ SUPPLIERS = ["Highveld Steel Supply", "Rand Bearings & Drives", "Coastal Coating
 OPENING_MARK = "Nest demo opening stock"
 AT_SITE = {347: {"sent": [("ACM-GEARMOTOR", 1), ("ACM-SCRAPER", 6), ("ACM-GRATING", 12), ("ACM-HANDRAIL", 1)],
 				 "used": [("ACM-SCRAPER", 6), ("ACM-GRATING", 8)]}}
+
+# A purchase order already with the supplier for a job's Ordered lines, so a delivery
+# can be booked in live (the Receive screen on a phone). Job no -> supplier.
+ON_ORDER = {349: "Rand Bearings & Drives"}
 
 # Quotes that became the demo jobs: quote no -> (job no, rep, value incl VAT).
 WON = {
@@ -294,6 +298,7 @@ def _load(me):
 		make_job(job, users, customers, company)
 	make_quotes(users, customers)
 	make_stock(company)
+	make_purchases()
 
 	use_job_numbers()
 	# Anything created after this moment is test data the broom also clears.
@@ -419,6 +424,27 @@ def make_stock(company):
 			job.db_set("job_warehouse", stock.site_store(job), update_modified=False)
 		stock.move_goods(job, main, job.job_warehouse, [{"item": c, "qty": q} for c, q in moves["sent"]], _("Delivered to site"))
 		stock.use_on_site(job, [{"item": c, "qty": q} for c, q in moves["used"]], _("Fitted on site"))
+
+
+def make_purchases():
+	"""A submitted PO for each ON_ORDER job's Ordered lines, delivering to the job's site store."""
+	for job_no, title in ON_ORDER.items():
+		job = frappe.get_doc("Project", f"JOB-{job_no}")
+		lines = [
+			{"item": m.item, "qty": m.qty, "row": m.name}
+			for m in job.job_materials
+			if m.status == "Ordered" and m.item
+		]
+		if not lines:
+			continue
+		po = purchasing.create_po_request(
+			job, frappe.db.get_value("Supplier", {"supplier_name": title}), lines, add_days(today(), 3)
+		)
+		job.flags.job_demo_load = True
+		job.save(ignore_permissions=True)
+		order = frappe.get_doc("Purchase Order", po)
+		order.flags.ignore_permissions = True
+		order.submit()
 
 
 def remove_job_stock(projects):

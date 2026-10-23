@@ -7,7 +7,7 @@
 frappe.pages['job-board'].on_page_load = function(wrapper) {
 	var page = frappe.ui.make_app_page({ parent: wrapper, title: __('Job Board'), single_column: true });
 
-	var BUILD_MARKER = 'v0.0.14-2026-10-07-open-job';
+	var BUILD_MARKER = 'v0.0.15-2026-10-23-assistant';
 	console.log('Job Board loaded:', BUILD_MARKER);
 
 	[
@@ -23,6 +23,14 @@ frappe.pages['job-board'].on_page_load = function(wrapper) {
 	});
 
 	wrapper.jobBoard = new JobBoard(page);
+
+	// The Nest Assistant mic (where installed) puts tasks and notes on the open job.
+	frappe.nest_assistant_context = frappe.nest_assistant_context || {};
+	frappe.nest_assistant_context['job-board'] = function() {
+		var panel = wrapper.jobBoard.panel;
+		if (!panel.name) return null;
+		return { doctype: 'Project', name: panel.name, title: panel.job ? panel.job.project_name : panel.name };
+	};
 };
 
 frappe.pages['job-board'].on_page_show = function(wrapper) {

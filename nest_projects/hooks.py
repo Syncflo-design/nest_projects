@@ -26,6 +26,10 @@ nest_demo_loaders = [
 	}
 ]
 
+# What the Nest Assistant can look up about jobs, where it is installed (ignored elsewhere).
+nest_assistant_tools = ["nest_projects.assistant.tools"]
+nest_assistant_workload = ["nest_projects.assistant.workload"]
+
 doc_events = {
 	"Project": {
 		"validate": "nest_projects.jobs.validate_project",

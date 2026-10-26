@@ -7,7 +7,7 @@
 frappe.pages['job-board'].on_page_load = function(wrapper) {
 	var page = frappe.ui.make_app_page({ parent: wrapper, title: __('Job Board'), single_column: true });
 
-	var BUILD_MARKER = 'v0.0.15-2026-10-23-assistant';
+	var BUILD_MARKER = 'v0.0.16-2026-10-26-note-mic';
 	console.log('Job Board loaded:', BUILD_MARKER);
 
 	[
@@ -75,6 +75,12 @@ var JB_PHONE = '(max-width: 767px)';
 function jb_esc(s) {
 	var map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 	return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) { return map[c]; });
+}
+
+// A note box you can speak into, where the Nest Assistant mic is installed and switched on.
+function jb_mic(dialog, fieldname) {
+	var field = dialog.fields_dict[fieldname];
+	if (frappe.nest_assistant && field) frappe.nest_assistant.add_mic(field.$input);
 }
 
 function jb_initials(name) {
@@ -979,6 +985,7 @@ class JobBoard {
 		}
 		dialog.show();
 		refresh_for(to_stage);
+		jb_mic(dialog, 'note');
 	}
 
 	move(job, to_stage, owner, note) {
@@ -1500,6 +1507,7 @@ class JobPanel {
 			}
 		});
 		dialog.show();
+		jb_mic(dialog, 'note');
 	}
 
 	open_used() {
@@ -1528,6 +1536,7 @@ class JobPanel {
 			}
 		});
 		dialog.show();
+		jb_mic(dialog, 'note');
 	}
 
 	stock_call(method, args, done) {

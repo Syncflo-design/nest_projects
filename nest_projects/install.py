@@ -161,16 +161,25 @@ CUSTOM_FIELDS = {
 		},
 		{
 			"fieldname": "job_qc_section",
-			"label": "QC / FAT Checks",
+			"label": "QC / FAT",
 			"fieldtype": "Section Break",
 			"insert_after": "job_materials",
+		},
+		{
+			"fieldname": "job_qc_passed",
+			"label": "QC / FAT Passed",
+			"fieldtype": "Check",
+			"insert_after": "job_qc_section",
+			"description": "Yes or no. The workshop runs its own checks; the board only needs to know it passed.",
 		},
 		{
 			"fieldname": "job_qc_checks",
 			"label": "Checks",
 			"fieldtype": "Table",
 			"options": "Job QC Check",
-			"insert_after": "job_qc_section",
+			"insert_after": "job_qc_passed",
+			"hidden": 1,
+			"description": "The checklist from earlier versions. No longer used.",
 		},
 		{
 			"fieldname": "job_ready_section",

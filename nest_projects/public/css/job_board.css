@@ -359,6 +359,7 @@
 .jb-p-nextact { margin: 0 0 14px; padding: 9px 10px; font-size: 13px; align-items: center; gap: 8px; border-radius: 9px; border: 1px solid var(--jb-border); }
 .jb-p-faint { opacity: .4; }
 .jb-p-faint:hover { opacity: 1; }
+.jb-p-yesno { display: inline-flex; gap: 6px; }
 
 .jb-p-sec { border: 1px solid var(--jb-border); border-radius: 11px; padding: 10px 12px 6px; margin-bottom: 12px; }
 .jb-p-sec-head { display: flex; align-items: center; gap: 7px; font-weight: 700; font-size: 13.5px; margin-bottom: 4px; }

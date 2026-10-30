@@ -58,8 +58,8 @@ REGISTER = [
 	("AT1420", "paul", "DASwacon", "Tender JGDM2026/27-002 Nqanqarhu Water Treatment Works Upgrade", 320139.50, None),
 ]
 
-# Items the jobs' materials point at, with a buying price excl VAT. Not every one is on a job;
-# the broom removes them all.
+# Stock items earlier versions of the demo created. The demo no longer creates items (materials are
+# a description only); the broom still removes these.
 ITEMS = [
 	("ACM-LADDER-SEC", "Galvanised ladder sections", 4800), ("ACM-FIX-BRKT", "Fixing brackets", 85),
 	("ACM-BAR-SCREEN", "316 stainless bar screen", 18500), ("ACM-RAKE", "Rake and holder", 1650),
@@ -74,7 +74,6 @@ ITEMS = [
 	("ACM-TELE-TUBE", "Telescopic tube 316", 24500), ("ACM-HEADSTOCK", "Headstock and spindle", 13200),
 	("ACM-HARDOX-10", "Hardox 450 wear plate 10 mm", 6900), ("ACM-GREASE-5KG", "Bearing grease 5 kg", 950),
 ]
-ITEM_BY_NAME = {name: code for code, name, _rate in ITEMS}
 
 # Earlier versions of the demo also loaded suppliers, opening stock, goods at site and a
 # purchase order. The demo no longer does (no workshop stock); the broom still clears them.
@@ -109,47 +108,46 @@ STAGE_REGULARS = {
 }
 
 STANDARD_MILESTONES = [
-	("On order", 20, "Order"),
-	("On drawing approval", 30, "Drawing Approval"),
+	("On order", 50, "Order"),
 	("On FAT", 50, "QC / FAT"),
 ]
 
 # Each job: where it is, who has it, and the path it took (stage, person, days ago, note).
 # "next" is the next action; "hold" (one of the Held Up reasons), "waiting" and "blocker"
-# say what is holding it up. Materials are only the key items: (description, qty, status, long-lead).
+# say what is holding it up. Kept deliberately thin: one material line per job and no more than
+# two lines in any list. Material: (description, qty, status, long-lead).
 JOBS = [
 	{
 		"no": 345, "title": "Clear Water Access Ladders", "customer": "Boat Sne Investments",
 		"site": "Clear Water Reservoir", "quote": "AT1403", "po": "BSI-0091", "due": -9,
 		"owner": None, "no_drawing": 1, "qc_passed": 1,
 		"milestones": [("On delivery", 100, "Customer Ready", "INV0000561")],
-		"materials": [("Galvanised ladder sections", 4, "Received"), ("Fixing brackets", 16, "Received")],
+		"materials": [("Galvanised ladder sections", 4, "Received")],
 		"path": [("Order", "me", 34), ("Engineering", "carla", 32), ("Procurement", "thandi", 28),
 				 ("Production", "werner", 22), ("QC / FAT", "sipho", 14), ("Customer Ready", "me", 11),
 				 ("Invoiced", None, 8, "Delivered and invoiced in Sage")],
 		"scope": "Supply and install four galvanised access ladders with safety cages.",
-		"ready": ["packaging", "delivery", "installation"], "ready_done": 4,
+		"ready_done": 2,
 	},
 	{
 		"no": 346, "title": "Kareeberg Hand Screen", "customer": "Ban Wrence", "site": "Kareeberg WWTW",
 		"quote": "AT1417", "po": "BW-2214", "due": 1, "owner": "me", "no_drawing": 1, "qc_passed": 1,
 		"next": "Book delivery with the customer",
 		"milestones": [("On order", 50, "Order", "INV0000570"), ("On FAT", 50, "QC / FAT", None)],
-		"materials": [("316 stainless bar screen", 1, "Received"), ("Rake and holder", 1, "Received")],
+		"materials": [("316 stainless bar screen", 1, "Received")],
 		"path": [("Order", "me", 24), ("Engineering", "carla", 22), ("Procurement", "thandi", 19),
 				 ("Production", "werner", 12), ("QC / FAT", "sipho", 6),
 				 ("Customer Ready", "me", 2, "FAT passed. Ready for collection.")],
 		"scope": "Manual bar screen, 316 stainless, 25 mm spacing, with rake.",
-		"ready": ["packaging", "delivery"], "ready_done": 1,
+		"ready_done": 1,
 	},
 	{
 		"no": 347, "title": "Clarifier Bridge Refurbishment", "customer": "Wythe Municipal",
 		"site": "Site Charlie", "quote": "AT1402", "po": "WM-55821", "due": 16, "owner": "werner",
 		"working": 1, "next": "Fit the new drive and scraper blades",
 		"drawings": [("GA-347-01", "A", "Clarifier bridge general arrangement", "Approved", 20)],
-		"milestones": [("On order", 20, "Order", "INV0000559"), ("On drawing approval", 30, "Drawing Approval", "INV0000566"),
-					   ("On FAT", 50, "QC / FAT", None)],
-		"materials": [("Bridge drive gearmotor", 1, "Received", 1), ("Scraper blades", 6, "Received")],
+		"milestones": [("On order", 50, "Order", "INV0000559"), ("On FAT", 50, "QC / FAT", None)],
+		"materials": [("Bridge drive gearmotor", 1, "Received", 1)],
 		"path": [("Order", "me", 38), ("Engineering", "jason", 36), ("Drawing Approval", "jason", 26),
 				 ("Procurement", "thandi", 20), ("Production", "werner", 9)],
 		"scope": "Strip, blast and recoat bridge; replace drive and scraper blades.",
@@ -161,6 +159,7 @@ JOBS = [
 		"next": "Chase the client for the wear-plate grade",
 		"drawings": [("GA-348-01", "A", "Classifier repair general arrangement", "Draft", None)],
 		"milestones": [("On order", 50, "Order", "INV0000568"), ("On delivery", 50, "Customer Ready", None)],
+		"materials": [("Hardox wear plates", 6, "To Order")],
 		"path": [("Order", "me", 27, "Order received. 50% deposit invoiced."), ("Engineering", "jason", 25)],
 		"scope": "Repair classifier spiral and replace wear plates.",
 	},
@@ -169,11 +168,9 @@ JOBS = [
 		"site": "Twinsaver Mill", "quote": "AT1379", "po": "1667", "due": 6, "owner": "thandi", "working": 1,
 		"drawings": [("GA-349-02", "B", "Screen general arrangement", "Superseded", None),
 					 ("GA-349-02", "C", "Screen general arrangement", "Approved", 9)],
-		"next": "Order the gearbox and screen panels",
-		"materials": [("Drive motor 2.2 kW IE3", 1, "Ordered"), ("Gearbox SEW R47", 1, "To Order", 1),
-					  ("Wedge-wire screen panel", 2, "To Order")],
-		"milestones": [("On order", 20, "Order", "INV0000571"), ("On drawing approval", 30, "Drawing Approval", None),
-					   ("On FAT", 50, "QC / FAT", None)],
+		"next": "Order the gearbox",
+		"materials": [("Gearbox SEW R47", 1, "To Order", 1)],
+		"milestones": [("On order", 50, "Order", "INV0000571"), ("On FAT", 50, "QC / FAT", None)],
 		"path": [("Order", "me", 29), ("Engineering", "carla", 27), ("Drawing Approval", "carla", 15, "Rev B sent to client"),
 				 ("Procurement", "thandi", 8, "Rev C approved by client")],
 		"scope": "Wedge-wire screen with drive, frame and launder.",
@@ -184,16 +181,12 @@ JOBS = [
 		"priority": "High", "hold": "GA approval", "blocker": "Rev B sent to the client, no answer yet",
 		"next": "Chase the client for Rev B sign-off",
 		"drawings": [("GA-350-01", "A", "Aerator general arrangement", "Superseded", None),
-					 ("GA-350-01", "B", "Aerator general arrangement", "Sent for Approval", None),
-					 ("DT-350-02", "A", "Rotor shaft detail", "Draft", None)],
-		"materials": [("Aerator gearbox overhaul kit", 4, "To Order", 1), ("Rotor shaft EN19 90 mm", 4, "To Order", 1),
-					  ("Coupling Rex Omega E20", 4, "To Order")],
-		"milestones": [("On order", 20, "Order", "INV0000579"), ("On drawing approval", 30, "Drawing Approval", None),
-					   ("On FAT", 50, "QC / FAT", None)],
+					 ("GA-350-01", "B", "Aerator general arrangement", "Sent for Approval", None)],
+		"materials": [("Aerator gearbox overhaul kit", 4, "To Order", 1)],
+		"milestones": [("On order", 50, "Order", "INV0000579"), ("On FAT", 50, "QC / FAT", None)],
 		"path": [("Order", "me", 12, "PO-1074 received, linked to QUOTE-1413"), ("Engineering", "paul", 11),
 				 ("Drawing Approval", "paul", 2, "Rev B sent to client for approval")],
 		"scope": "Wastewater equipment refurbishment: overhaul four surface aerators, new rotor shafts and couplings.",
-		"ready": ["packaging", "delivery", "installation", "safety_file"],
 	},
 	{
 		"no": 351, "title": "Distell Screen in a Sump", "customer": "Lower Tech Processing", "site": "Distell Plant",
@@ -202,6 +195,7 @@ JOBS = [
 		"next": "Start the sump screen GA",
 		"drawings": [("GA-351-01", "A", "Sump screen general arrangement", "Draft", None)],
 		"milestones": [("On order", 50, "Order", "INV0000575"), ("On delivery", 50, "Customer Ready", None)],
+		"materials": [("Drum screen basket", 1, "To Order")],
 		"path": [("Order", "me", 8), ("Engineering", "paul", 7)],
 		"scope": "Drum screen installed in an existing sump, with access platform.",
 	},
@@ -209,6 +203,7 @@ JOBS = [
 		"no": 352, "title": "Sluice Gates (x4)", "customer": "ERS Construction Group", "site": "Site Bravo",
 		"quote": "AT1391", "po": "ERS-7781", "due": 40, "owner": "jason", "next": "Engineering to start after JOB-348",
 		"milestones": STANDARD_MILESTONES,
+		"materials": [("Stainless sluice gate frames", 4, "To Order")],
 		"path": [("Order", "me", 1, "New order. Engineering to start after JOB-348.")],
 		"scope": "Four 1.2 m x 1.2 m stainless sluice gates with handwheel operators.",
 	},
@@ -216,14 +211,12 @@ JOBS = [
 		"no": 353, "title": "Telescopic Valve", "customer": "Erdem Construction", "site": "All Saints WWTW",
 		"quote": "AT1400", "po": "EC-1190", "due": 2, "owner": "sipho", "working": 1,
 		"drawings": [("GA-353-01", "B", "Telescopic valve general arrangement", "Approved", 21)],
-		"next": "Finish the FAT: vibration and paint checks",
-		"materials": [("Telescopic tube 316", 1, "Received", 1), ("Headstock and spindle", 1, "Received")],
-		"milestones": [("On order", 20, "Order", "INV0000560"), ("On drawing approval", 30, "Drawing Approval", "INV0000567"),
-					   ("On FAT", 50, "QC / FAT", None)],
+		"next": "Finish the FAT and mark it passed",
+		"materials": [("Telescopic tube 316", 1, "Received", 1)],
+		"milestones": [("On order", 50, "Order", "INV0000560"), ("On FAT", 50, "QC / FAT", None)],
 		"path": [("Order", "me", 30), ("Engineering", "jason", 28), ("Drawing Approval", "jason", 21),
 				 ("Procurement", "thandi", 17), ("Production", "werner", 10), ("QC / FAT", "sipho", 1)],
 		"scope": "Telescopic decant valve, 300 mm, with headstock.",
-		"ready": ["packaging", "delivery", "safety_file"],
 	},
 	{
 		"no": 354, "title": "Archimedes Screw Pump Bearings", "customer": "Websonga", "site": "Site Delta",
@@ -231,6 +224,7 @@ JOBS = [
 		"next": "Send the bearing housing drawing for approval",
 		"drawings": [("DT-354-01", "A", "Bottom bearing housing detail", "Draft", None)],
 		"milestones": STANDARD_MILESTONES,
+		"materials": [("Bearing set SKF 22220", 2, "In Stock")],
 		"path": [("Order", "me", 5), ("Engineering", "carla", 4)],
 		"scope": "Replace bottom and top bearings on two Archimedes screw pumps.",
 	},
@@ -239,6 +233,7 @@ JOBS = [
 		"site": "Kat River Abstraction", "quote": "AT1389", "po": "DW-2290", "due": 28, "owner": "carla",
 		"next": "Survey the penstocks on site",
 		"milestones": STANDARD_MILESTONES,
+		"materials": [("Penstock spindles and seals", 2, "To Order")],
 		"path": [("Order", "me", 3), ("Engineering", "carla", 3)],
 		"scope": "Refurbish two penstocks: new seals, spindles and actuators.",
 	},
@@ -274,8 +269,6 @@ def _load(me, company):
 	for key, (first, last, _role) in PEOPLE.items():
 		users[key] = ensure_user(key, first, last, company)
 	customers = {name: ensure_customer(name) for name in {j["customer"] for j in JOBS}}
-	for code, name, rate in ITEMS:
-		ensure_item(code, name, rate)
 
 	for stage, key in STAGE_REGULARS.items():
 		if not frappe.db.get_value("Job Stage", stage, "default_owner"):
@@ -431,29 +424,6 @@ def cancel_and_delete(entries):
 		frappe.delete_doc("Stock Entry", name, ignore_permissions=True, force=True)
 
 
-def ensure_item(code, name, rate):
-	if not frappe.db.exists("Item", code):
-		frappe.get_doc(
-			{
-				"doctype": "Item",
-				"item_code": code,
-				"item_name": name,
-				"description": name,
-				"item_group": frappe.db.get_value("Item Group", {"name": "Raw Material", "is_group": 0})
-				or frappe.db.get_value("Item Group", {"is_group": 0}),
-				"stock_uom": "Nos" if frappe.db.exists("UOM", "Nos") else frappe.db.get_value("UOM", {}, "name"),
-				"is_stock_item": 1,
-				"is_purchase_item": 1,
-			}
-		).insert(ignore_permissions=True)
-	price_list = frappe.db.get_single_value("Buying Settings", "buying_price_list") or "Standard Buying"
-	if frappe.db.exists("Price List", price_list) and not frappe.db.exists(
-		"Item Price", {"item_code": code, "price_list": price_list}
-	):
-		frappe.get_doc(
-			{"doctype": "Item Price", "item_code": code, "price_list": price_list, "price_list_rate": rate}
-		).insert(ignore_permissions=True)
-
 
 def reset_series(series, doctype, prefix):
 	highest = 0
@@ -523,6 +493,7 @@ def make_job(job, users, customers, company):
 			"job_waiting_on": users.get(job["waiting"]) if job.get("waiting") else None,
 			"job_blocker": job.get("blocker"),
 			"job_drawing_not_required": job.get("no_drawing", 0),
+			"job_qc_passed": job.get("qc_passed", 0),
 		}
 	)
 	for dwg_no, rev, title, status, approved_days in job.get("drawings", []):
@@ -533,16 +504,9 @@ def make_job(job, users, customers, company):
 	for material in job.get("materials", []):
 		description, qty, status = material[:3]
 		doc.append("job_materials", {
-			"item": ITEM_BY_NAME.get(description), "description": description, "qty": qty, "status": status,
+			"description": description, "qty": qty, "status": status,
 			"long_lead": material[3] if len(material) > 3 else 0,
 			"expected_on": add_days(today(), 3) if status == "Ordered" else None,
-		})
-	if job.get("qc_passed"):
-		# One tick: passed by whoever had the job in QC / FAT, on the day it left.
-		qc_step = next((i for i, step in enumerate(path) if step[0] == "QC / FAT"), None)
-		left_qc = path[qc_step + 1][2] if qc_step is not None and qc_step + 1 < len(path) else 1
-		doc.append("job_qc_checks", {
-			"check": _("QC / FAT passed"), "done": 1, "done_by": users["sipho"], "done_on": stamp(left_qc),
 		})
 	ready_text = dict(ORDER_FACE)
 	for i, check in enumerate([ready_text[k] for k in job.get("ready", ["delivery"])] + [ALWAYS_READY]):

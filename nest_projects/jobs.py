@@ -191,17 +191,15 @@ def gate_failure(doc, gate):
 		if any(d.status == "Approved" for d in doc.get("job_drawings") or []):
 			return None
 		return _("no drawing has been approved by the customer.")
-	if gate in (QC_GATE, READY_GATE):
-		qc = gate == QC_GATE
-		checks = doc.get("job_qc_checks" if qc else "job_ready_checks") or []
+	if gate == QC_GATE:
+		# One yes or no: the workshop runs its own checks.
+		return None if doc.get("job_qc_passed") else _("QC / FAT has not been passed yet.")
+	if gate == READY_GATE:
+		checks = doc.get("job_ready_checks") or []
 		done = sum(1 for c in checks if c.done)
-		if not checks:
-			# No QC passed yet is a gap; no ready checks just means nothing to arrange.
-			return _("QC / FAT has not been passed yet.") if qc else None
-		if done < len(checks):
-			return (_("{0} of {1} QC checks are done.") if qc else _("{0} of {1} customer ready checks are done.")).format(
-				done, len(checks)
-			)
+		# No ready checks just means nothing to arrange.
+		if checks and done < len(checks):
+			return _("{0} of {1} customer ready checks are done.").format(done, len(checks))
 	return None
 
 

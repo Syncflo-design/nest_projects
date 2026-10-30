@@ -10,13 +10,13 @@ Requires `erpnext` only. No client-specific settings are hardcoded.
 
 - **Job Stage** — the board's columns, in order. Each stage can name who usually
   handles it, limit who can be picked by role, and set a gate the job must pass
-  before it can leave (drawing approved / QC checks complete). Eight default
+  before it can leave (drawing approved / QC / FAT passed / ready checks done). Eight default
   stages are seeded on a fresh site.
 - **Job tab on Project** — stage, responsible person, progress (queued / in
   progress), next action, quote no, customer PO, site, held up (a reason from a
   short list, who it is waiting on, details), plus tables for drawings (with
-  revisions), key materials (with a long-lead flag), QC/FAT, payment milestones
-  and the stage history.
+  revisions), key materials (with a long-lead flag), QC / FAT passed (yes or
+  no), payment milestones and the stage history.
 
 Project's own customer, priority and expected end date (due date) are used as-is.
 
@@ -68,8 +68,8 @@ responsible person (On it / Queued, Change), due date and priority (Change asks
 why; the history records who, old to new and the reason), quote and PO, held up
 (Mark as held up: reason, waiting on, details / Sorted), the next action,
 drawings with revisions (Sent to client, Client approved, New revision with
-upload; older revisions are superseded), materials, QC / FAT (one tick: QC / FAT
-passed), Customer Ready checks (tap to tick; who and when is recorded), payment
+upload; older revisions are superseded), materials, QC / FAT passed (Yes / No),
+Customer Ready checks (tap to tick; who and when is recorded), payment
 milestones (Mark invoiced with the Sage invoice number) and the history.
 The footer hands over or sends back, and says why when a gate blocks it.
 
@@ -108,8 +108,9 @@ It loads into the company of whoever presses it (the presenter login's default
 company), and creates eleven anonymised engineer-to-order jobs (JOB-345 to
 JOB-355), six people (`@acme-demo.test`, Projects User, limited to that company,
 no password, email alerts off), the customers, drawings with generated A3 GA
-sheets, key materials (some long-lead), next actions, held-up reasons, 20/30/50
-payment milestones and back-dated stage history. All dates are relative to the
+sheets, one key material each (some long-lead), next actions, held-up reasons,
+payment milestones and back-dated stage history, with no more than two lines in
+any list. All dates are relative to the
 day it's loaded. It also loads their August sales register (26 quotes) plus
 the 11 quotes that became the jobs. New projects then continue as JOB-356 and
 new quotes as AT1430. No stock, suppliers or purchase orders.
@@ -141,7 +142,7 @@ Needs the eight default stages and a Company.
    The held-up line clears, Thandi gets an alert, the history records it.
    Nothing typed twice.
 7. JOB-349 in Procurement shows the gearbox as **long-lead to order**; tap it
-   through Ordered to Received and everyone on the job is told. JOB-353 in QC / FAT: one tap on
-   **QC / FAT passed** and it can be released. JOB-346 in Customer Ready waits
+   through Ordered to Received and everyone on the job is told. JOB-353 in QC / FAT: set **QC / FAT
+   passed?** to Yes and it can be released. JOB-346 in Customer Ready waits
    on its ready checks.
 8. On a phone: same board, one stage per screen, tap a card for the panel.

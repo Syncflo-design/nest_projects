@@ -122,7 +122,7 @@ def job_facts(doc, stages):
 		"quote": doc.job_quote_ref,
 		"materials": tally(doc.job_materials, "status"),
 		"drawings": tally([d for d in doc.job_drawings if d.status != "Superseded"], "status"),
-		"QC checks": ticked(doc.job_qc_checks),
+		"QC / FAT passed": "yes" if doc.get("job_qc_passed") else "no",
 		"customer ready checks": ticked(doc.job_ready_checks),
 		"last move": (
 			f"{last.from_stage or 'start'} to {last.to_stage} ({user_name(last.to_owner) or 'nobody'}) "

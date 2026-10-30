@@ -7,7 +7,7 @@
 frappe.pages['job-board'].on_page_load = function(wrapper) {
 	var page = frappe.ui.make_app_page({ parent: wrapper, title: __('Job Board'), single_column: true });
 
-	var BUILD_MARKER = 'v0.0.17-2026-10-30-simple-board';
+	var BUILD_MARKER = 'v0.0.18-2026-10-30-qc-yes-no';
 	console.log('Job Board loaded:', BUILD_MARKER);
 
 	[
@@ -584,9 +584,8 @@ class JobBoard {
 		else if (m.to_order) tags.push(this.tag('package', __('{0} to order', [m.to_order]), 'warn'));
 		else if (m.on_order) tags.push(this.tag('package', __('{0} on order', [m.on_order]), ''));
 		var stage = this.data.stage_map[j.job_stage] || {};
-		var q = j.qc || {};
 		if (stage.gate === 'QC checks complete') {
-			tags.push(this.tag('check-square', q.total && q.done === q.total ? __('QC passed') : __('QC not passed'), q.total && q.done === q.total ? 'good' : 'warn'));
+			tags.push(this.tag('check-square', j.job_qc_passed ? __('QC passed') : __('QC not passed'), j.job_qc_passed ? 'good' : 'warn'));
 		}
 		var r = j.ready || {};
 		if (r.total && stage.gate === 'Ready checks complete') {
@@ -1463,23 +1462,19 @@ class JobPanel {
 		return this.section('package', __('Materials'), parts.join(''), action, rows || empty);
 	}
 
-	// QC / FAT is one tick: the workshop runs its own checks; the board only needs to know it passed.
+	// QC / FAT is one yes or no: the workshop runs its own checks; the board only needs to know it passed.
 	render_qc() {
 		var j = this.job;
-		var checks = j.checks || [];
-		var passed = checks.length && checks.every(function(c) { return c.done; });
-		var here = j.stage_order[j.stage] || 0;
-		var qc_stage = this.board.data ? this.board.data.stages.filter(function(s) { return s.gate === 'QC checks complete'; })[0] : null;
-		// Before the QC stage there is nothing to show yet.
-		if (!passed && (!qc_stage || here < qc_stage.sequence)) return '';
-		var last = checks[checks.length - 1] || {};
-		var body = passed
-			? '<div class="jb-p-item jb-p-check jb-p-done"><i class="ph ph-check-circle jb-p-tick"></i><div class="jb-p-grow"><div class="jb-p-item-title">' +
-				__('QC / FAT passed') + '</div><div class="jb-p-item-sub">' + jb_esc(this.user_name(last.done_by)) + ' &middot; ' + jb_esc(jb_when(last.done_on)) + '</div></div></div>'
-			: (j.can_write
-				? '<button class="btn btn-sm btn-success" data-p-action="qc-pass"><i class="ph ph-seal-check"></i> ' + __('QC / FAT passed') + '</button>'
-				: '<div class="jb-p-empty">' + __('Not passed yet.') + '</div>');
-		return this.section('check-square', __('QC / FAT'), passed ? jb_tag(__('Passed'), 'good') : '', '', body);
+		var answer = j.can_write
+			? ['<button class="btn btn-xs ' + (j.qc_passed ? 'btn-success' : 'btn-default') + '" data-p-action="qc" data-passed="1">' + __('Yes') + '</button>',
+				'<button class="btn btn-xs ' + (j.qc_passed ? 'btn-default' : 'btn-warning') + '" data-p-action="qc" data-passed="0">' + __('No') + '</button>'].join('')
+			: jb_tag(j.qc_passed ? __('Yes') : __('No'), j.qc_passed ? 'good' : 'warn');
+		return [
+			'<section class="jb-p-sec">',
+			'  <div class="jb-p-sec-head"><i class="ph ph-check-square"></i><span>' + __('QC / FAT passed?') + '</span><span class="jb-p-gap"></span>' +
+				'<span class="jb-p-yesno">' + answer + '</span></div>',
+			'</section>'
+		].join('\n');
 	}
 
 	// A tick-list: the Customer Ready checks from the Order Face.
@@ -1734,8 +1729,8 @@ class JobPanel {
 			} else if (action === 'long-lead') {
 				me.act('set_long_lead', { row: row, long_lead: $b.attr('data-flag') });
 				if ($b.attr('data-flag') === '1') frappe.show_alert({ message: __('Flagged long-lead. Everyone on the job has been told.'), indicator: 'orange' });
-			} else if (action === 'qc-pass') {
-				me.act('pass_qc');
+			} else if (action === 'qc') {
+				me.act('set_qc', { passed: $b.attr('data-passed') });
 			} else if (action === 'check') {
 				me.act('set_check', { row: row, done: $b.attr('data-done'), table: $b.attr('data-table') });
 			} else if (action === 'invoiced') {

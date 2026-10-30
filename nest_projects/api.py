@@ -22,6 +22,7 @@ JOB_FIELDS = [
 	"job_waiting_on",
 	"job_blocker",
 	"job_drawing_not_required",
+	"job_qc_passed",
 ]
 
 
@@ -151,7 +152,6 @@ def attach_summaries(jobs, stages):
 	names = [j.name for j in jobs]
 	drawings = child_rows("Job Drawing", names, ["drawing_no", "revision", "status"])
 	materials = child_rows("Job Material", names, ["status", "long_lead"])
-	checks = child_rows("Job QC Check", names, ["done"])
 	ready_checks = child_rows("Job Ready Check", names, ["done"])
 
 	for job in jobs:
@@ -177,8 +177,6 @@ def attach_summaries(jobs, stages):
 			"long_lead": sum(1 for m in mats if m.long_lead and m.status == "To Order"),
 		}
 
-		qc = checks.get(job.name, [])
-		job.qc = {"total": len(qc), "done": sum(1 for c in qc if c.done)}
 		rc = ready_checks.get(job.name, [])
 		job.ready = {"total": len(rc), "done": sum(1 for c in rc if c.done)}
 

@@ -121,7 +121,7 @@ def add_material(project, description, qty=1, item=None, long_lead=0):
 
 
 @frappe.whitelist()
-def set_check(project, row, done, table="job_qc_checks"):
+def set_check(project, row, done, table="job_ready_checks"):
 	"""Ticks a QC / FAT check or a Customer Ready check."""
 	if table not in CHECK_TABLES:
 		frappe.throw(_("Unknown checklist."))
@@ -131,13 +131,10 @@ def set_check(project, row, done, table="job_qc_checks"):
 
 
 @frappe.whitelist()
-def pass_qc(project):
-	"""QC / FAT in one tick: every listed check done, or a single "QC / FAT passed" line if none are listed."""
+def set_qc(project, passed):
+	"""QC / FAT passed: yes or no."""
 	doc = writable(project)
-	if not doc.get("job_qc_checks"):
-		doc.append("job_qc_checks", {"check": _("QC / FAT passed")})
-	for row in doc.job_qc_checks:
-		row.done = 1
+	doc.job_qc_passed = 1 if frappe.utils.cint(passed) else 0
 	return save(doc)
 
 
@@ -161,7 +158,7 @@ def job_payload(doc):
 	previous = stages[here - 1] if here > 0 else None
 
 	people = {doc.job_owner, doc.job_waiting_on} | {r.to_owner for r in doc.job_stage_log} | {r.moved_by for r in doc.job_stage_log}
-	people |= {r.done_by for r in doc.job_qc_checks} | {r.done_by for r in doc.job_ready_checks}
+	people |= {r.done_by for r in doc.job_ready_checks}
 	users = {
 		u.name: {"full_name": u.full_name or u.name, "image": u.user_image}
 		for u in frappe.get_all(
@@ -193,7 +190,7 @@ def job_payload(doc):
 		"drawing_not_required": doc.job_drawing_not_required,
 		"drawings": rows("job_drawings", ["drawing_no", "revision", "title", "file", "status", "approved_on"]),
 		"materials": rows("job_materials", ["item", "description", "qty", "status", "long_lead", "expected_on", "purchase_order"]),
-		"checks": rows("job_qc_checks", ["check", "done", "done_by", "done_on", "notes"]),
+		"qc_passed": doc.get("job_qc_passed") or 0,
 		"ready_checks": rows("job_ready_checks", ["check", "done", "done_by", "done_on", "notes"]),
 		"milestones": rows("job_milestones", ["label", "percent", "due_at_stage", "invoiced", "invoice_ref"]),
 		"history": list(reversed(rows("job_stage_log", ["from_stage", "to_stage", "to_owner", "moved_by", "moved_on", "event", "note"]))),

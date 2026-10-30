@@ -13,20 +13,26 @@ Requires `erpnext` only. No client-specific settings are hardcoded.
   before it can leave (drawing approved / QC checks complete). Eight default
   stages are seeded on a fresh site.
 - **Job tab on Project** — stage, responsible person, progress (queued / in
-  progress), quote no, customer PO, site, what it's held up by, plus tables for
-  drawings (with revisions), materials, QC/FAT checks, payment milestones and
-  the stage history.
+  progress), next action, quote no, customer PO, site, held up (a reason from a
+  short list, who it is waiting on, details), plus tables for drawings (with
+  revisions), key materials (with a long-lead flag), QC/FAT, payment milestones
+  and the stage history.
 
 Project's own customer, priority and expected end date (due date) are used as-is.
 
 ## Job Board (`/desk/job-board`)
 
 - One column per stage; a Project appears once it has a stage.
-- Cards show job no, customer, site, due date (amber within 7 days, red when
-  overdue), what it's held up by, drawing revision, materials, QC progress,
-  what's ready to invoice, the responsible person and time in the stage.
-- Stat tiles in the header are the filters: active, with me, held up, overdue,
-  due in 7 days, to invoice. Search covers job, customer, site and person.
+- Cards are kept simple: job no, customer, site, due date (amber within 7 days,
+  red when overdue), what's holding it up ("GA approval · waiting on Paul" and
+  the details), the next action, the responsible person and time in the stage.
+  Tags only for what needs attention: a drawing not yet approved, materials
+  still to come (long-lead first), QC or ready checks in their own stage.
+- Stat tiles in the header are the filters: active, with me (yours, or waiting
+  on you), held up, overdue, due in 7 days. Search covers job, customer, site,
+  person, next action and what it's held up by.
+- **Wall screen:** `/desk/job-board?tv=1` shows the board alone and larger for a
+  TV in the office; it refreshes itself.
 - **Handover:** drag a card to another column, tap its arrow, or press Hand
   over in the job panel. One dialog asks which stage (any stage, forwards or
   back; it suggests the next one, or where the card was dropped) and who takes
@@ -58,46 +64,25 @@ Project's own customer, priority and expected end date (due date) are used as-is
 ## Job panel
 
 Tapping a card opens the job beside the board instead of the Project form:
-responsible person (On it / Queued, Change), due date, quote and PO, what it's
-held up by (Mark as held up / Sorted), drawings with revisions (Sent to client,
-Client approved, New revision with upload; older revisions are superseded),
-materials (tap to move To Order → Ordered → Received), QC / FAT checks and
-Customer Ready checks (tap to tick; who and when is recorded), payment
+responsible person (On it / Queued, Change), due date and priority (Change asks
+why; the history records who, old to new and the reason), quote and PO, held up
+(Mark as held up: reason, waiting on, details / Sorted), the next action,
+drawings with revisions (Sent to client, Client approved, New revision with
+upload; older revisions are superseded), materials, QC / FAT (one tick: QC / FAT
+passed), Customer Ready checks (tap to tick; who and when is recorded), payment
 milestones (Mark invoiced with the Sage invoice number) and the history.
 The footer hands over or sends back, and says why when a gate blocks it.
 
-## PO requests from the job
+## Materials
 
-**Raise PO request** in the job panel's Materials section opens with the job's
-To Order lines. Remove what isn't being ordered now, add rows for anything not
-on the list, pick the supplier and required-by date. It creates a **draft
-Purchase Order** linked to the job (header and every line), priced from the
-buying price list. Lines added in the dialog are written onto the job's
-materials, so nobody has to keep the list up front.
-
-The job's material lines then follow the PO: **Requested** (draft), **Ordered**
-(submitted), **Received** (purchase receipt), back to **To Order** if the PO is
-cancelled or deleted. Lines on a PO can't be ticked by hand.
-
-Approval tiers are phase 2: `nest_po_management` approves any purchase order,
-whatever raised it, so it can be added without changing this app.
-
-## Stock on site
-
-Every job on the board gets its own **site store** (a warehouse named after the
-job and its site, under a "Job Sites" group), created when the job gets a stage.
-The job panel's **Stock on site** section shows what is there, with:
-
-- **Goods to site** — from any store (main store by default) to the site store,
-  a Material Transfer tagged to the job. Starts with the job's received and
-  in-stock materials.
-- **Return** — the same, from site back to a store.
-- **Used on site** — a Material Issue from the site store against the job, which
-  is what costs the job (the job's consumed material cost).
-
-PO requests carry a required **Deliver to** store (the site store by default);
-the goods receipt takes each line's warehouse from the PO. Goods in transit and
-vans are left to the van/handover app.
+Only the key and long-lead items, not every nut and bolt: the workshop runs its
+own stock. **Add item** puts one on the job; tap its status to move it
+To Order → Ordered → Received. Tap the hourglass to flag it **long-lead**, so it
+is ordered as soon as engineering knows it is needed, before the drawing is
+signed off. Marking an item Received, or flagging one long-lead, alerts the
+job's people: the responsible person, everyone the job has been with, and the
+usual person for each later stage. Lines linked to a purchase order (from
+earlier versions) still follow it.
 
 ## Quotes (the sales register)
 
@@ -118,21 +103,22 @@ won), description, value incl VAT, date, rep, follow-up date, status
 
 ## Demo data
 
-On an empty board a System Manager sees **Load demo jobs**. It creates eleven
-anonymised engineer-to-order jobs (JOB-345 to JOB-355) for "Acme Engineering",
-six people (`@acme-demo.test`, Projects User, no password, email alerts off),
-the customers, drawings with generated A3 GA sheets, materials, FAT checks,
-20/30/50 payment milestones and back-dated stage history. All dates are
-relative to the day it's loaded. It also loads their August sales register
-(26 quotes) plus the 11 quotes that became the jobs. New projects then
-continue as JOB-356 and new quotes as AT1430. Stock items, three suppliers,
-opening stock and a site store per job come with it; JOB-347 already has goods
-at site (some used), and JOB-349's ordered motor is on a submitted purchase
-order, so a delivery can be booked in live on a phone (nest_floor).
+On an empty board a System Manager or Projects Manager sees **Load demo jobs**.
+It loads into the company of whoever presses it (the presenter login's default
+company), and creates eleven anonymised engineer-to-order jobs (JOB-345 to
+JOB-355), six people (`@acme-demo.test`, Projects User, limited to that company,
+no password, email alerts off), the customers, drawings with generated A3 GA
+sheets, key materials (some long-lead), next actions, held-up reasons, 20/30/50
+payment milestones and back-dated stage history. All dates are relative to the
+day it's loaded. It also loads their August sales register (26 quotes) plus
+the 11 quotes that became the jobs. New projects then continue as JOB-356 and
+new quotes as AT1430. No stock, suppliers or purchase orders.
 
-The broom button removes the demo **and every job, quote and customer created
-since it was loaded**, then resets the numbering, so: load, test, broom, and
-load again live in front of the prospect.
+The broom button (System Manager) removes the demo, the jobs created since it
+was loaded **in the demo's company**, and the quotes created since, then resets
+the numbering, so: load, test, broom, and load again live in front of the
+prospect. It leaves other companies' jobs and any customer it didn't load
+alone, because other demo profiles share the site.
 
 Needs the eight default stages and a Company.
 
@@ -152,8 +138,10 @@ Needs the eight default stages and a Company.
 5. Tap JOB-350: the panel shows the lock and why. Open Rev B (the eye) to
    show the GA sheet, then tap **Client approved** on it.
 6. **Hand over to Procurement**: Thandi is already filled in; add a note.
-   The blocker clears, **Invoice 30%** appears, Thandi gets an alert, the
-   history records it. Nothing typed twice.
-7. JOB-353 in QC / FAT shows QC 4/6; tick the last two in the panel and it
-   can be released. JOB-346 in Customer Ready waits on its ready checks.
+   The held-up line clears, Thandi gets an alert, the history records it.
+   Nothing typed twice.
+7. JOB-349 in Procurement shows the gearbox as **long-lead to order**; tap it
+   through Ordered to Received and everyone on the job is told. JOB-353 in QC / FAT: one tap on
+   **QC / FAT passed** and it can be released. JOB-346 in Customer Ready waits
+   on its ready checks.
 8. On a phone: same board, one stage per screen, tap a card for the panel.

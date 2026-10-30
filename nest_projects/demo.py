@@ -12,9 +12,7 @@ from frappe.model.naming import NamingSeries
 from frappe.desk.doctype.notification_settings.notification_settings import create_notification_settings
 from frappe.utils import add_days, add_to_date, get_datetime, now_datetime, today
 
-from nest_projects import purchasing, stock
 from nest_projects.jobs import READY_GATE, default_company, ensure_customer
-from nest_projects.purchasing import default_warehouse
 from nest_projects.quotes import ALWAYS_READY, ORDER_FACE
 
 DOMAIN = "acme-demo.test"
@@ -23,6 +21,11 @@ LAST_DEMO_NO = 355
 QUOTE_SERIES = "AT.####"
 LAST_DEMO_QUOTE = 1429
 LOADED_KEY = "nest_projects_demo_loaded_on"
+# The company the demo was loaded into: the broom only clears jobs of that company,
+# because other demo profiles share the site.
+COMPANY_KEY = "nest_projects_demo_company"
+# Who loaded it: quotes they raise while testing are cleared too.
+PRESENTER_KEY = "nest_projects_demo_presenter"
 
 # Their August sales register (already anonymised by them): quote, rep, customer,
 # description, value incl VAT, and the Lost reason where it was lost.
@@ -55,8 +58,8 @@ REGISTER = [
 	("AT1420", "paul", "DASwacon", "Tender JGDM2026/27-002 Nqanqarhu Water Treatment Works Upgrade", 320139.50, None),
 ]
 
-# Items the jobs use and buy, with a buying price excl VAT. The last two are not on any
-# job's list, for showing that a PO request can add what the list missed.
+# Items the jobs' materials point at, with a buying price excl VAT. Not every one is on a job;
+# the broom removes them all.
 ITEMS = [
 	("ACM-LADDER-SEC", "Galvanised ladder sections", 4800), ("ACM-FIX-BRKT", "Fixing brackets", 85),
 	("ACM-BAR-SCREEN", "316 stainless bar screen", 18500), ("ACM-RAKE", "Rake and holder", 1650),
@@ -73,16 +76,10 @@ ITEMS = [
 ]
 ITEM_BY_NAME = {name: code for code, name, _rate in ITEMS}
 
+# Earlier versions of the demo also loaded suppliers, opening stock, goods at site and a
+# purchase order. The demo no longer does (no workshop stock); the broom still clears them.
 SUPPLIERS = ["Highveld Steel Supply", "Rand Bearings & Drives", "Coastal Coatings"]
-
-# Opening stock in the main store, and one job (in Production) with goods already at site, part used.
 OPENING_MARK = "Nest demo opening stock"
-AT_SITE = {347: {"sent": [("ACM-GEARMOTOR", 1), ("ACM-SCRAPER", 6), ("ACM-GRATING", 12), ("ACM-HANDRAIL", 1)],
-				 "used": [("ACM-SCRAPER", 6), ("ACM-GRATING", 8)]}}
-
-# A purchase order already with the supplier for a job's Ordered lines, so a delivery
-# can be booked in live (the Receive screen on a phone). Job no -> supplier.
-ON_ORDER = {349: "Rand Bearings & Drives"}
 
 # Quotes that became the demo jobs: quote no -> (job no, rep, value incl VAT).
 WON = {
@@ -117,21 +114,14 @@ STANDARD_MILESTONES = [
 	("On FAT", 50, "QC / FAT"),
 ]
 
-FAT_CHECKS = [
-	"Dimensional check against GA drawing",
-	"Shaft run-out within 0.05 mm",
-	"Bearing temperature run (2 hours)",
-	"Vibration below 4.5 mm/s",
-	"Paint DFT 250 micron",
-	"Nameplate, tagging and job marking",
-]
-
 # Each job: where it is, who has it, and the path it took (stage, person, days ago, note).
+# "next" is the next action; "hold" (one of the Held Up reasons), "waiting" and "blocker"
+# say what is holding it up. Materials are only the key items: (description, qty, status, long-lead).
 JOBS = [
 	{
 		"no": 345, "title": "Clear Water Access Ladders", "customer": "Boat Sne Investments",
 		"site": "Clear Water Reservoir", "quote": "AT1403", "po": "BSI-0091", "due": -9,
-		"owner": None, "no_drawing": 1, "qc_done": 3, "qc": FAT_CHECKS[:3],
+		"owner": None, "no_drawing": 1, "qc_passed": 1,
 		"milestones": [("On delivery", 100, "Customer Ready", "INV0000561")],
 		"materials": [("Galvanised ladder sections", 4, "Received"), ("Fixing brackets", 16, "Received")],
 		"path": [("Order", "me", 34), ("Engineering", "carla", 32), ("Procurement", "thandi", 28),
@@ -142,11 +132,10 @@ JOBS = [
 	},
 	{
 		"no": 346, "title": "Kareeberg Hand Screen", "customer": "Ban Wrence", "site": "Kareeberg WWTW",
-		"quote": "AT1417", "po": "BW-2214", "due": 1, "owner": "me", "no_drawing": 1,
-		"qc": FAT_CHECKS[:5], "qc_done": 5,
+		"quote": "AT1417", "po": "BW-2214", "due": 1, "owner": "me", "no_drawing": 1, "qc_passed": 1,
+		"next": "Book delivery with the customer",
 		"milestones": [("On order", 50, "Order", "INV0000570"), ("On FAT", 50, "QC / FAT", None)],
-		"materials": [("316 stainless bar screen", 1, "Received"), ("Rake and holder", 1, "Received"),
-					  ("Anchor bolts M16", 8, "Received")],
+		"materials": [("316 stainless bar screen", 1, "Received"), ("Rake and holder", 1, "Received")],
 		"path": [("Order", "me", 24), ("Engineering", "carla", 22), ("Procurement", "thandi", 19),
 				 ("Production", "werner", 12), ("QC / FAT", "sipho", 6),
 				 ("Customer Ready", "me", 2, "FAT passed. Ready for collection.")],
@@ -156,13 +145,11 @@ JOBS = [
 	{
 		"no": 347, "title": "Clarifier Bridge Refurbishment", "customer": "Wythe Municipal",
 		"site": "Site Charlie", "quote": "AT1402", "po": "WM-55821", "due": 16, "owner": "werner",
-		"working": 1,
+		"working": 1, "next": "Fit the new drive and scraper blades",
 		"drawings": [("GA-347-01", "A", "Clarifier bridge general arrangement", "Approved", 20)],
-		"qc": FAT_CHECKS, "qc_done": 0,
 		"milestones": [("On order", 20, "Order", "INV0000559"), ("On drawing approval", 30, "Drawing Approval", "INV0000566"),
 					   ("On FAT", 50, "QC / FAT", None)],
-		"materials": [("Bridge drive gearmotor", 1, "Received"), ("Scraper blades", 6, "Received"),
-					  ("Walkway grating", 12, "Received"), ("Handrail kit", 1, "Received")],
+		"materials": [("Bridge drive gearmotor", 1, "Received", 1), ("Scraper blades", 6, "Received")],
 		"path": [("Order", "me", 38), ("Engineering", "jason", 36), ("Drawing Approval", "jason", 26),
 				 ("Procurement", "thandi", 20), ("Production", "werner", 9)],
 		"scope": "Strip, blast and recoat bridge; replace drive and scraper blades.",
@@ -170,7 +157,8 @@ JOBS = [
 	{
 		"no": 348, "title": "Waterval Classifier Repairs", "customer": "Strangeing Mind", "site": "Waterval",
 		"quote": "AT1429", "po": "PO-0216", "due": -4, "owner": "jason", "working": 1, "priority": "High",
-		"blocker": "Client to confirm wear-plate material (Hardox 400 or 500)",
+		"hold": "Info from client", "blocker": "Client to confirm wear-plate material (Hardox 400 or 500)",
+		"next": "Chase the client for the wear-plate grade",
 		"drawings": [("GA-348-01", "A", "Classifier repair general arrangement", "Draft", None)],
 		"milestones": [("On order", 50, "Order", "INV0000568"), ("On delivery", 50, "Customer Ready", None)],
 		"path": [("Order", "me", 27, "Order received. 50% deposit invoiced."), ("Engineering", "jason", 25)],
@@ -181,9 +169,9 @@ JOBS = [
 		"site": "Twinsaver Mill", "quote": "AT1379", "po": "1667", "due": 6, "owner": "thandi", "working": 1,
 		"drawings": [("GA-349-02", "B", "Screen general arrangement", "Superseded", None),
 					 ("GA-349-02", "C", "Screen general arrangement", "Approved", 9)],
-		"materials": [("316 stainless sheet 3 mm", 4, "In Stock"), ("Drive motor 2.2 kW IE3", 1, "Ordered"),
-					  ("Gearbox SEW R47", 1, "To Order"), ("Wedge-wire screen panel", 2, "To Order"),
-					  ("Bearings UCF210", 4, "In Stock"), ("Stainless fastener kit", 1, "To Order")],
+		"next": "Order the gearbox and screen panels",
+		"materials": [("Drive motor 2.2 kW IE3", 1, "Ordered"), ("Gearbox SEW R47", 1, "To Order", 1),
+					  ("Wedge-wire screen panel", 2, "To Order")],
 		"milestones": [("On order", 20, "Order", "INV0000571"), ("On drawing approval", 30, "Drawing Approval", None),
 					   ("On FAT", 50, "QC / FAT", None)],
 		"path": [("Order", "me", 29), ("Engineering", "carla", 27), ("Drawing Approval", "carla", 15, "Rev B sent to client"),
@@ -193,14 +181,13 @@ JOBS = [
 	{
 		"no": 350, "title": "Phalaphala Aerators Refurbishment", "customer": "Lumpspec Consultants",
 		"site": "Site Alpha", "quote": "AT1413", "po": "PO-1074", "due": 5, "owner": "paul", "working": 1,
-		"priority": "High", "blocker": "Awaiting customer drawing approval (Rev B sent)",
+		"priority": "High", "hold": "GA approval", "blocker": "Rev B sent to the client, no answer yet",
+		"next": "Chase the client for Rev B sign-off",
 		"drawings": [("GA-350-01", "A", "Aerator general arrangement", "Superseded", None),
 					 ("GA-350-01", "B", "Aerator general arrangement", "Sent for Approval", None),
 					 ("DT-350-02", "A", "Rotor shaft detail", "Draft", None)],
-		"materials": [("Aerator gearbox overhaul kit", 4, "To Order"), ("Rotor shaft EN19 90 mm", 4, "To Order"),
-					  ("Bearing set SKF 22220", 8, "In Stock"), ("Epoxy paint system 20 L", 3, "In Stock"),
+		"materials": [("Aerator gearbox overhaul kit", 4, "To Order", 1), ("Rotor shaft EN19 90 mm", 4, "To Order", 1),
 					  ("Coupling Rex Omega E20", 4, "To Order")],
-		"qc": FAT_CHECKS, "qc_done": 0,
 		"milestones": [("On order", 20, "Order", "INV0000579"), ("On drawing approval", 30, "Drawing Approval", None),
 					   ("On FAT", 50, "QC / FAT", None)],
 		"path": [("Order", "me", 12, "PO-1074 received, linked to QUOTE-1413"), ("Engineering", "paul", 11),
@@ -211,6 +198,8 @@ JOBS = [
 	{
 		"no": 351, "title": "Distell Screen in a Sump", "customer": "Lower Tech Processing", "site": "Distell Plant",
 		"quote": "AT965 Rev4", "po": "LTP-3302", "due": 15, "owner": "paul",
+		"hold": "Capacity", "waiting": "me", "blocker": "Paul is on JOB-350 first. Reassign it or move the date.",
+		"next": "Start the sump screen GA",
 		"drawings": [("GA-351-01", "A", "Sump screen general arrangement", "Draft", None)],
 		"milestones": [("On order", 50, "Order", "INV0000575"), ("On delivery", 50, "Customer Ready", None)],
 		"path": [("Order", "me", 8), ("Engineering", "paul", 7)],
@@ -218,7 +207,7 @@ JOBS = [
 	},
 	{
 		"no": 352, "title": "Sluice Gates (x4)", "customer": "ERS Construction Group", "site": "Site Bravo",
-		"quote": "AT1391", "po": "ERS-7781", "due": 40, "owner": "jason",
+		"quote": "AT1391", "po": "ERS-7781", "due": 40, "owner": "jason", "next": "Engineering to start after JOB-348",
 		"milestones": STANDARD_MILESTONES,
 		"path": [("Order", "me", 1, "New order. Engineering to start after JOB-348.")],
 		"scope": "Four 1.2 m x 1.2 m stainless sluice gates with handwheel operators.",
@@ -227,8 +216,8 @@ JOBS = [
 		"no": 353, "title": "Telescopic Valve", "customer": "Erdem Construction", "site": "All Saints WWTW",
 		"quote": "AT1400", "po": "EC-1190", "due": 2, "owner": "sipho", "working": 1,
 		"drawings": [("GA-353-01", "B", "Telescopic valve general arrangement", "Approved", 21)],
-		"materials": [("Telescopic tube 316", 1, "Received"), ("Headstock and spindle", 1, "Received")],
-		"qc": FAT_CHECKS, "qc_done": 4,
+		"next": "Finish the FAT: vibration and paint checks",
+		"materials": [("Telescopic tube 316", 1, "Received", 1), ("Headstock and spindle", 1, "Received")],
 		"milestones": [("On order", 20, "Order", "INV0000560"), ("On drawing approval", 30, "Drawing Approval", "INV0000567"),
 					   ("On FAT", 50, "QC / FAT", None)],
 		"path": [("Order", "me", 30), ("Engineering", "jason", 28), ("Drawing Approval", "jason", 21),
@@ -239,6 +228,7 @@ JOBS = [
 	{
 		"no": 354, "title": "Archimedes Screw Pump Bearings", "customer": "Websonga", "site": "Site Delta",
 		"quote": "AT1394", "po": "WS-404", "due": 9, "owner": "carla", "working": 1,
+		"next": "Send the bearing housing drawing for approval",
 		"drawings": [("DT-354-01", "A", "Bottom bearing housing detail", "Draft", None)],
 		"milestones": STANDARD_MILESTONES,
 		"path": [("Order", "me", 5), ("Engineering", "carla", 4)],
@@ -247,6 +237,7 @@ JOBS = [
 	{
 		"no": 355, "title": "Kat River Penstock Refurbishment", "customer": "Duwacona",
 		"site": "Kat River Abstraction", "quote": "AT1389", "po": "DW-2290", "due": 28, "owner": "carla",
+		"next": "Survey the penstocks on site",
 		"milestones": STANDARD_MILESTONES,
 		"path": [("Order", "me", 3), ("Engineering", "carla", 3)],
 		"scope": "Refurbish two penstocks: new seals, spindles and actuators.",
@@ -259,14 +250,16 @@ def load_demo():
 	"""Loads as Administrator so a Projects Manager demo login can run it live; the presenter is still "me"."""
 	frappe.only_for(["System Manager", "Projects Manager"])
 	me = frappe.session.user
+	# The presenter's own company, read before switching to Administrator.
+	company = default_company()
 	frappe.set_user("Administrator")
 	try:
-		return _load(me)
+		return _load(me, company)
 	finally:
 		frappe.set_user(me)
 
 
-def _load(me):
+def _load(me, company):
 	if frappe.db.exists("Project", {"job_is_demo": 1}):
 		frappe.throw(_("The demo jobs are already loaded. Remove them first."))
 	needed = {step[0] for job in JOBS for step in job["path"]}
@@ -276,16 +269,13 @@ def _load(me):
 	taken = [f"JOB-{j['no']}" for j in JOBS if frappe.db.exists("Project", f"JOB-{j['no']}")]
 	if taken:
 		frappe.throw(_("These projects already exist: {0}").format(", ".join(taken)))
-	company = default_company()
 
 	users = {"me": me}
 	for key, (first, last, _role) in PEOPLE.items():
-		users[key] = ensure_user(key, first, last)
+		users[key] = ensure_user(key, first, last, company)
 	customers = {name: ensure_customer(name) for name in {j["customer"] for j in JOBS}}
 	for code, name, rate in ITEMS:
 		ensure_item(code, name, rate)
-	for supplier in SUPPLIERS:
-		ensure_supplier(supplier)
 
 	for stage, key in STAGE_REGULARS.items():
 		if not frappe.db.get_value("Job Stage", stage, "default_owner"):
@@ -297,12 +287,12 @@ def _load(me):
 	for job in JOBS:
 		make_job(job, users, customers, company)
 	make_quotes(users, customers)
-	make_stock(company)
-	make_purchases()
 
 	use_job_numbers()
 	# Anything created after this moment is test data the broom also clears.
 	frappe.db.set_default(LOADED_KEY, str(now_datetime()))
+	frappe.db.set_default(COMPANY_KEY, company)
+	frappe.db.set_default(PRESENTER_KEY, me)
 	return {"jobs": len(JOBS), "quotes": len(REGISTER) + len(WON), "people": len(PEOPLE)}
 
 
@@ -314,19 +304,29 @@ def is_loaded():
 def remove_demo():
 	frappe.only_for("System Manager")
 	loaded_on = frappe.db.get_default(LOADED_KEY)
-	since = [["creation", ">=", loaded_on]] if loaded_on else None
-
-	# Quotes first (they link to the jobs): the demo set, and any raised while testing.
-	quotes = set(frappe.get_all("Job Quote", filters={"is_demo": 1}, pluck="name"))
-	if since:
-		quotes |= set(frappe.get_all("Job Quote", filters=since, pluck="name"))
-	for name in quotes:
-		frappe.delete_doc("Job Quote", name, ignore_permissions=True, force=True)
+	# A demo loaded before the company was recorded: the company its jobs are in.
+	company = frappe.db.get_default(COMPANY_KEY) or frappe.db.get_value("Project", {"job_is_demo": 1}, "company")
+	# What was raised while testing is only cleared when it can be pinned to the demo's company.
+	since = [["creation", ">=", loaded_on]] if loaded_on and company else None
 
 	names = set(frappe.get_all("Project", filters={"job_is_demo": 1}, pluck="name"))
 	if since:
-		names |= set(frappe.get_all("Project", filters=since + [["job_stage", "is", "set"]], pluck="name"))
+		names |= set(
+			frappe.get_all("Project", filters=since + [["company", "=", company], ["job_stage", "is", "set"]], pluck="name")
+		)
 	names = list(names)
+
+	# Quotes first (they link to the jobs): the demo set, those that became these jobs, and any the
+	# presenter or the demo people raised while testing. Quotes have no company, so nobody else's.
+	quotes = set(frappe.get_all("Job Quote", filters={"is_demo": 1}, pluck="name"))
+	if names:
+		quotes |= set(frappe.get_all("Job Quote", filters={"project": ["in", names]}, pluck="name"))
+	if since:
+		testers = [demo_email(key) for key in PEOPLE] + list(filter(None, [frappe.db.get_default(PRESENTER_KEY)]))
+		quotes |= set(frappe.get_all("Job Quote", filters=since + [["owner", "in", testers]], pluck="name"))
+	for name in quotes:
+		frappe.delete_doc("Job Quote", name, ignore_permissions=True, force=True)
+
 	# Undo stock newest first: movements at the jobs, then purchases, then opening stock and site stores.
 	remove_job_stock(names)
 	remove_purchasing(names)
@@ -353,9 +353,8 @@ def remove_demo():
 			frappe.db.set_value("User", email, "enabled", 0)
 			kept.append(email)
 
+	# Only the demo's own customers: customers have no company, and other profiles share the site.
 	customers = {frappe.db.get_value("Customer", {"customer_name": t}) for t in {j["customer"] for j in JOBS}}
-	if since:
-		customers |= set(frappe.get_all("Customer", filters=since, pluck="name"))
 	for name in filter(None, customers):
 		try:
 			frappe.delete_doc("Customer", name, ignore_permissions=True)
@@ -383,6 +382,8 @@ def remove_demo():
 	reset_series(SERIES, "Project", "JOB-")
 	reset_series(QUOTE_SERIES, "Job Quote", "AT")
 	frappe.db.set_default(LOADED_KEY, "")
+	frappe.db.set_default(COMPANY_KEY, "")
+	frappe.db.set_default(PRESENTER_KEY, "")
 	return {"jobs": len(names), "quotes": len(quotes), "kept": kept}
 
 
@@ -402,49 +403,6 @@ def remove_purchasing(projects):
 				doc.flags.ignore_permissions = True
 				doc.cancel()
 			frappe.delete_doc(doctype, name, ignore_permissions=True, force=True)
-
-
-def make_stock(company):
-	"""Opening stock in the main store, then goods at site (and some used) for the AT_SITE jobs."""
-	main = default_warehouse(company)
-	opening = frappe.new_doc("Stock Entry")
-	opening.stock_entry_type = "Material Receipt"
-	opening.company = company
-	opening.remarks = OPENING_MARK
-	for code, _name, rate in ITEMS:
-		qty = 40 if rate < 1000 else (12 if rate < 10000 else 4)
-		opening.append("items", {"item_code": code, "qty": qty, "t_warehouse": main, "basic_rate": rate})
-	opening.flags.ignore_permissions = True
-	opening.insert()
-	opening.submit()
-
-	for job_no, moves in AT_SITE.items():
-		job = frappe.get_doc("Project", f"JOB-{job_no}")
-		if not job.job_warehouse:
-			job.db_set("job_warehouse", stock.site_store(job), update_modified=False)
-		stock.move_goods(job, main, job.job_warehouse, [{"item": c, "qty": q} for c, q in moves["sent"]], _("Delivered to site"))
-		stock.use_on_site(job, [{"item": c, "qty": q} for c, q in moves["used"]], _("Fitted on site"))
-
-
-def make_purchases():
-	"""A submitted PO for each ON_ORDER job's Ordered lines, delivering to the job's site store."""
-	for job_no, title in ON_ORDER.items():
-		job = frappe.get_doc("Project", f"JOB-{job_no}")
-		lines = [
-			{"item": m.item, "qty": m.qty, "row": m.name}
-			for m in job.job_materials
-			if m.status == "Ordered" and m.item
-		]
-		if not lines:
-			continue
-		po = purchasing.create_po_request(
-			job, frappe.db.get_value("Supplier", {"supplier_name": title}), lines, add_days(today(), 3)
-		)
-		job.flags.job_demo_load = True
-		job.save(ignore_permissions=True)
-		order = frappe.get_doc("Purchase Order", po)
-		order.flags.ignore_permissions = True
-		order.submit()
 
 
 def remove_job_stock(projects):
@@ -495,17 +453,6 @@ def ensure_item(code, name, rate):
 		frappe.get_doc(
 			{"doctype": "Item Price", "item_code": code, "price_list": price_list, "price_list_rate": rate}
 		).insert(ignore_permissions=True)
-
-
-def ensure_supplier(title):
-	if frappe.db.get_value("Supplier", {"supplier_name": title}):
-		return
-	group = frappe.db.get_single_value("Buying Settings", "supplier_group") or frappe.db.get_value(
-		"Supplier Group", {"is_group": 0}
-	)
-	frappe.get_doc(
-		{"doctype": "Supplier", "supplier_name": title, "supplier_type": "Company", "supplier_group": group}
-	).insert(ignore_permissions=True)
 
 
 def reset_series(series, doctype, prefix):
@@ -571,6 +518,9 @@ def make_job(job, users, customers, company):
 			"job_quote_ref": job["quote"],
 			"job_customer_po": job["po"],
 			"job_site": job.get("site"),
+			"job_next_action": job.get("next"),
+			"job_hold_reason": job.get("hold"),
+			"job_waiting_on": users.get(job["waiting"]) if job.get("waiting") else None,
 			"job_blocker": job.get("blocker"),
 			"job_drawing_not_required": job.get("no_drawing", 0),
 		}
@@ -580,16 +530,19 @@ def make_job(job, users, customers, company):
 			"drawing_no": dwg_no, "revision": rev, "title": title, "status": status,
 			"approved_on": add_days(today(), -approved_days) if approved_days else None,
 		})
-	for description, qty, status in job.get("materials", []):
+	for material in job.get("materials", []):
+		description, qty, status = material[:3]
 		doc.append("job_materials", {
 			"item": ITEM_BY_NAME.get(description), "description": description, "qty": qty, "status": status,
+			"long_lead": material[3] if len(material) > 3 else 0,
 			"expected_on": add_days(today(), 3) if status == "Ordered" else None,
 		})
-	for i, check in enumerate(job.get("qc", [])):
-		done = i < job.get("qc_done", 0)
+	if job.get("qc_passed"):
+		# One tick: passed by whoever had the job in QC / FAT, on the day it left.
+		qc_step = next((i for i, step in enumerate(path) if step[0] == "QC / FAT"), None)
+		left_qc = path[qc_step + 1][2] if qc_step is not None and qc_step + 1 < len(path) else 1
 		doc.append("job_qc_checks", {
-			"check": check, "done": int(done),
-			"done_by": users["sipho"] if done else None, "done_on": stamp(1) if done else None,
+			"check": _("QC / FAT passed"), "done": 1, "done_by": users["sipho"], "done_on": stamp(left_qc),
 		})
 	ready_text = dict(ORDER_FACE)
 	for i, check in enumerate([ready_text[k] for k in job.get("ready", ["delivery"])] + [ALWAYS_READY]):
@@ -705,7 +658,7 @@ def use_job_numbers():
 		frappe.clear_cache(doctype=doctype)
 
 
-def ensure_user(key, first, last):
+def ensure_user(key, first, last, company):
 	email = demo_email(key)
 	if not frappe.db.exists("User", email):
 		frappe.get_doc(
@@ -725,6 +678,18 @@ def ensure_user(key, first, last):
 	if not frappe.db.exists("Notification Settings", email):
 		create_notification_settings(email)
 	frappe.db.set_value("Notification Settings", email, "enable_email_notifications", 0)
+	# The demo people belong to the demo's company, like its presenter login.
+	if not frappe.db.exists("User Permission", {"user": email, "allow": "Company"}):
+		frappe.get_doc(
+			{
+				"doctype": "User Permission",
+				"user": email,
+				"allow": "Company",
+				"for_value": company,
+				"apply_to_all_doctypes": 1,
+				"is_default": 1,
+			}
+		).insert(ignore_permissions=True)
 	return email
 
 

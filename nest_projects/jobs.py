@@ -6,7 +6,7 @@ one made on the board.
 
 import frappe
 from frappe import _
-from frappe.utils import now_datetime, today
+from frappe.utils import formatdate, getdate, now_datetime, today
 
 DRAWING_GATE = "Drawing approved"
 QC_GATE = "QC checks complete"
@@ -30,6 +30,8 @@ def validate_project(doc, method=None):
 		check_gates(doc, old_stage, stage)
 	if stage_moved:
 		doc.job_stage_since = now_datetime() if stage else None
+	log_changes(doc, before)
+	collect_material_alerts(doc, before)
 	# History covers every handover: a new stage, or a new person in the same stage.
 	if not (stage_moved or (owner_moved and stage)):
 		return
@@ -66,6 +68,87 @@ def notify_owner(doc, method=None):
 			"email_content": note or "",
 		}
 	).insert(ignore_permissions=True)
+
+
+def log_changes(doc, before):
+	"""A due date or priority change goes in the history: who, old to new, and why."""
+	if not before or not doc.job_stage:
+		return
+	changes = []
+	old_due, new_due = before.expected_end_date, doc.expected_end_date
+	if (getdate(old_due) if old_due else None) != (getdate(new_due) if new_due else None):
+		changes.append(_("Due {0} to {1}").format(short_date(old_due), short_date(new_due)))
+	if (before.priority or "") != (doc.priority or ""):
+		changes.append(_("Priority {0} to {1}").format(_(before.priority or "-"), _(doc.priority or "-")))
+	if not changes:
+		return
+	doc.append(
+		"job_stage_log",
+		{
+			"from_stage": doc.job_stage,
+			"to_stage": doc.job_stage,
+			"moved_by": frappe.session.user,
+			"moved_on": now_datetime(),
+			"event": "; ".join(changes),
+			"note": doc.flags.get("job_change_reason"),
+		},
+	)
+
+
+def short_date(value):
+	return formatdate(value, "d MMM") if value else _("none")
+
+
+def collect_material_alerts(doc, before):
+	"""A material just marked Received, or just flagged long-lead while still to order.
+
+	Only noted here; send_material_alerts sends them once the save has gone through.
+	"""
+	if not before:
+		return
+	old = {row.name: row for row in before.get("job_materials") or []}
+	alerts = []
+	for row in doc.get("job_materials") or []:
+		prev = old.get(row.name)
+		what = row.description or row.item
+		if row.status == "Received" and not (prev and prev.status == "Received"):
+			alerts.append(_("{0} has arrived for {1}").format(what, doc.name))
+		elif row.long_lead and row.status == "To Order" and not (prev and prev.long_lead):
+			alerts.append(_("{0} on {1} is long-lead: order it now").format(what, doc.name))
+	doc.flags.job_material_alerts = alerts
+
+
+def send_material_alerts(doc, method=None):
+	"""Everyone on the job sees a material arrive, or a long-lead item flagged, straight away."""
+	alerts = doc.flags.get("job_material_alerts")
+	if not alerts:
+		return
+	doc.flags.job_material_alerts = None
+	for user in job_people(doc):
+		for subject in alerts:
+			frappe.get_doc(
+				{
+					"doctype": "Notification Log",
+					"for_user": user,
+					"from_user": frappe.session.user,
+					"type": "Alert",
+					"document_type": "Project",
+					"document_name": doc.name,
+					"subject": subject,
+				}
+			).insert(ignore_permissions=True)
+
+
+def job_people(doc):
+	"""The responsible person, everyone the job has been with, and whoever usually takes its later stages."""
+	sequence = dict(frappe.get_all("Job Stage", fields=["name", "sequence"], as_list=True))
+	later = frappe.get_all(
+		"Job Stage",
+		filters=[["sequence", ">", sequence.get(doc.job_stage, 0)], ["default_owner", "is", "set"]],
+		pluck="default_owner",
+	)
+	people = {doc.job_owner} | {row.to_owner for row in doc.get("job_stage_log") or []} | set(later)
+	return sorted(p for p in people if p and p != frappe.session.user)
 
 
 def stamp_checks(doc):
@@ -113,8 +196,8 @@ def gate_failure(doc, gate):
 		checks = doc.get("job_qc_checks" if qc else "job_ready_checks") or []
 		done = sum(1 for c in checks if c.done)
 		if not checks:
-			# No QC listed is a gap; no ready checks just means nothing to arrange.
-			return _("no QC checks have been listed.") if qc else None
+			# No QC passed yet is a gap; no ready checks just means nothing to arrange.
+			return _("QC / FAT has not been passed yet.") if qc else None
 		if done < len(checks):
 			return (_("{0} of {1} QC checks are done.") if qc else _("{0} of {1} customer ready checks are done.")).format(
 				done, len(checks)

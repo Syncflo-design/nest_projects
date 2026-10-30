@@ -7,7 +7,7 @@
 frappe.pages['job-board'].on_page_load = function(wrapper) {
 	var page = frappe.ui.make_app_page({ parent: wrapper, title: __('Job Board'), single_column: true });
 
-	var BUILD_MARKER = 'v0.0.16-2026-10-26-note-mic';
+	var BUILD_MARKER = 'v0.0.17-2026-10-30-simple-board';
 	console.log('Job Board loaded:', BUILD_MARKER);
 
 	[
@@ -55,16 +55,17 @@ var JB_STAGE_COLORS = {
 var JB_AVATAR_COLORS = ['#6366f1', '#0ea5e9', '#14b8a6', '#f59e0b', '#ec4899', '#8b5cf6', '#ef4444', '#22c55e'];
 var JB_GATE_TEXT = {
 	'Drawing approved': __("Can't leave until a drawing is approved"),
-	'QC checks complete': __("Can't leave until every QC check is done")
+	'QC checks complete': __("Can't leave until QC / FAT is passed")
 };
 var JB_FILTERS = [
 	{ key: 'all',     label: __('Active Jobs') },
 	{ key: 'mine',    label: __('With Me') },
 	{ key: 'held',    label: __('Held Up'),   tone: 'bad' },
 	{ key: 'over',    label: __('Overdue'),   tone: 'bad' },
-	{ key: 'soon',    label: __('Due 7 Days'), tone: 'warn' },
-	{ key: 'invoice', label: __('To Invoice'), tone: 'good' }
+	{ key: 'soon',    label: __('Due 7 Days'), tone: 'warn' }
 ];
+// Kept in step with HOLD_REASONS in install.py.
+var JB_HOLD_REASONS = ['GA approval', 'Info from client', 'Materials', 'Capacity', 'Priority clash', 'Other'];
 var JB_SOON_DAYS = 7;
 var JB_VIEW_KEY = 'nest-projects-board-view';
 var JB_HIDDEN_KEY = 'nest-projects-hidden-stages';
@@ -127,6 +128,8 @@ class JobBoard {
 
 		// v16: page.body is jQuery; create our own container (gotcha 2026-05-10, Variant 2).
 		this.$main = $('<div class="jb-root"></div>').appendTo(page.body);
+		// Wall screen: /desk/job-board?tv=1 shows the board alone, larger, for a TV in the office.
+		this.$main.toggleClass('jb-tv', new URLSearchParams(window.location.search).get('tv') === '1');
 		var $head = page.head ? $(page.head) : $(page.wrapper).find('.page-head');
 		if ($head && $head.length) $head.hide();
 
@@ -190,12 +193,12 @@ class JobBoard {
 			j.days_left = j.expected_end_date ? moment(j.expected_end_date).diff(today, 'days') : null;
 			j.over = !j.closed && j.days_left !== null && j.days_left < 0;
 			j.soon = !j.closed && j.days_left !== null && j.days_left >= 0 && j.days_left <= JB_SOON_DAYS;
-			j.held = !j.closed && !!(j.job_blocker || '').trim();
-			j.mine = !j.closed && j.job_owner === d.me;
-			j.invoice = !!(j.to_invoice && j.to_invoice.percent);
+			j.held = !j.closed && !!(j.job_hold_reason || (j.job_blocker || '').trim());
+			j.mine = !j.closed && (j.job_owner === d.me || j.job_waiting_on === d.me);
 			j.owner_name = j.job_owner ? ((d.users[j.job_owner] || {}).full_name || j.job_owner) : '';
-			j.search = [j.name, j.project_name, j.customer, j.job_site, j.job_quote_ref, j.job_customer_po, j.owner_name]
-				.join(' ').toLowerCase();
+			j.waiting_name = j.job_waiting_on ? ((d.users[j.job_waiting_on] || {}).full_name || j.job_waiting_on) : '';
+			j.search = [j.name, j.project_name, j.customer, j.job_site, j.job_quote_ref, j.job_customer_po, j.owner_name,
+				j.job_next_action, j.job_hold_reason, j.job_blocker].join(' ').toLowerCase();
 		});
 		d.jobs.sort(me.compare);
 		return d;
@@ -546,7 +549,9 @@ class JobBoard {
 				(j.priority === 'High' ? '<i class="ph ph-flag jb-prio" title="' + __('High priority') + '"></i>' : '') + due + '</div>',
 			'  <div class="jb-card-title">' + jb_esc(title) + '</div>',
 			where ? '  <div class="jb-card-cust"><i class="ph ph-buildings"></i>' + where + '</div>' : '',
-			j.held ? '  <div class="jb-block"><i class="ph ph-warning-octagon"></i><span>' + jb_esc(j.job_blocker) + '</span></div>' : '',
+			j.held ? '  <div class="jb-block"><i class="ph ph-warning-octagon"></i><span>' + this.render_hold(j) + '</span></div>' : '',
+			!j.closed && j.job_next_action ? '  <div class="jb-nextact"><i class="ph ph-arrow-bend-down-right"></i><span>' +
+				jb_esc(j.job_next_action) + '</span></div>' : '',
 			this.render_tags(j),
 			'  <div class="jb-card-foot">' +
 				(person_mode ? this.render_stage_tag(stage) + this.render_state(j) : this.render_owner(j)) + this.render_age(j) +
@@ -556,29 +561,36 @@ class JobBoard {
 		].join('\n');
 	}
 
+	// "GA approval · waiting on Paul", then the details: Rick's "Engineering · GA approval outstanding".
+	render_hold(j) {
+		var head = [j.job_hold_reason ? __(j.job_hold_reason) : '', j.waiting_name ? __('waiting on {0}', [j.waiting_name.split(' ')[0]]) : '']
+			.filter(Boolean).map(jb_esc).join(' &middot; ');
+		var details = (j.job_blocker || '').trim();
+		if (!head) return jb_esc(details);
+		return '<b>' + head + '</b>' + (details ? '<br>' + jb_esc(details) : '');
+	}
+
+	// Only what needs attention: a drawing not yet approved, materials still to come, and
+	// the QC or ready checks once the job sits in the stage gated on them.
 	render_tags(j) {
 		var tags = [];
-		if (j.drawing) {
-			var tone = j.drawing.approved ? 'good' : (j.drawing.status === 'Sent for Approval' ? 'warn' : '');
+		if (j.drawing && !j.drawing.approved) {
+			var tone = j.drawing.status === 'Sent for Approval' ? 'warn' : '';
 			tags.push(this.tag('file-text', __('Rev {0}', [jb_esc(j.drawing.rev || '-')]) + ' &middot; ' + jb_esc(__(j.drawing.status)), tone,
 				__('Drawing {0}', [j.drawing.no])));
-		} else if (j.job_drawing_not_required) {
-			tags.push(this.tag('file-text', __('No drawing approval'), ''));
 		}
 		var m = j.materials || {};
-		if (m.to_order) tags.push(this.tag('package', __('{0} to order', [m.to_order]), 'warn'));
+		if (m.long_lead) tags.push(this.tag('hourglass-medium', __('{0} long-lead to order', [m.long_lead]), 'bad'));
+		else if (m.to_order) tags.push(this.tag('package', __('{0} to order', [m.to_order]), 'warn'));
 		else if (m.on_order) tags.push(this.tag('package', __('{0} on order', [m.on_order]), ''));
-		else if (m.total) tags.push(this.tag('package', __('Materials in'), 'good'));
-		var q = j.qc || {};
-		if (q.total) tags.push(this.tag('check-square', __('QC {0}/{1}', [q.done, q.total]), q.done === q.total ? 'good' : ''));
-		// Customer Ready checks matter once the job reaches a stage gated on them.
-		var r = j.ready || {};
 		var stage = this.data.stage_map[j.job_stage] || {};
+		var q = j.qc || {};
+		if (stage.gate === 'QC checks complete') {
+			tags.push(this.tag('check-square', q.total && q.done === q.total ? __('QC passed') : __('QC not passed'), q.total && q.done === q.total ? 'good' : 'warn'));
+		}
+		var r = j.ready || {};
 		if (r.total && stage.gate === 'Ready checks complete') {
 			tags.push(this.tag('truck', __('Ready {0}/{1}', [r.done, r.total]), r.done === r.total ? 'good' : 'warn'));
-		}
-		if (j.invoice) {
-			tags.push(this.tag('receipt', __('Invoice {0}%', [j.to_invoice.percent]), 'good', j.to_invoice.labels.join(', ')));
 		}
 		return tags.length ? '  <div class="jb-chips">' + tags.join('') + '</div>' : '';
 	}
@@ -1203,7 +1215,6 @@ class JobPanel {
 		this.board = board;
 		this.name = null;
 		this.job = null;
-		this.editing_blocker = false;
 		this.$el = $([
 			'<div class="jb-panel-wrap">',
 			'  <div class="jb-panel-backdrop"></div>',
@@ -1217,7 +1228,6 @@ class JobPanel {
 	open(name) {
 		this.name = name;
 		this.job = null;
-		this.editing_blocker = false;
 		this.$panel.removeAttr('style').html('<div class="jb-p-loading"><i class="ph ph-kanban"></i>' + __('Opening {0}...', [jb_esc(name)]) + '</div>');
 		this.$el.addClass('open');
 		this.load();
@@ -1286,10 +1296,10 @@ class JobPanel {
 			'<div class="jb-p-body">',
 			this.render_facts(),
 			this.render_blocker(),
+			this.render_next(),
 			this.render_drawings(),
 			this.render_materials(),
-			this.render_stock(),
-			this.render_checks(j.checks, 'job_qc_checks', 'check-square', __('QC / FAT Checks')),
+			this.render_qc(),
 			this.render_checks(j.ready_checks, 'job_ready_checks', 'truck', __('Customer Ready Checks')),
 			this.render_milestones(),
 			this.render_history(),
@@ -1309,6 +1319,8 @@ class JobPanel {
 				: (days === 0 ? __('today') : (days === 1 ? __('tomorrow') : __('in {0} days', [days])));
 			due = '<span class="jb-due ' + cls + '">' + jb_esc(moment(j.due).format('D MMM YYYY')) + '</span> <span class="jb-p-muted">' + rel + '</span>';
 		}
+		// Due date and priority change together, with a reason, so the history shows who moved them and why.
+		var change = j.can_write ? '<button class="jb-p-link" data-p-action="due-edit">' + __('Change') + '</button>' : '';
 		var owner = j.owner
 			? this.board.avatar(j.owner) + '<span class="jb-owner">' + jb_esc(this.user_name(j.owner)) + '</span>' + this.render_state()
 			: '<span class="jb-avatar jb-none"><i class="ph ph-user"></i></span><span class="jb-owner jb-none">' + __('Unassigned') + '</span>';
@@ -1320,7 +1332,7 @@ class JobPanel {
 		return [
 			'<div class="jb-p-facts">',
 			fact(__('Responsible'), '<span class="jb-p-owner">' + owner + '</span>', true),
-			fact(__('Due'), due),
+			fact(__('Due'), due + change),
 			fact(__('Priority'), jb_esc(__(j.priority || 'Medium'))),
 			fact(__('Quote'), jb_esc(j.quote || '-')),
 			fact(__('Customer PO'), jb_esc(j.po || '-')),
@@ -1339,27 +1351,27 @@ class JobPanel {
 
 	render_blocker() {
 		var j = this.job;
-		if (this.editing_blocker) {
+		if (j.hold_reason || j.blocker) {
+			var head = [j.hold_reason ? __(j.hold_reason) : '', j.waiting_on ? __('waiting on {0}', [this.user_name(j.waiting_on)]) : '']
+				.filter(Boolean).map(jb_esc).join(' &middot; ');
 			return [
-				'<div class="jb-p-blockedit">',
-				'  <label class="jb-p-label" for="jb-p-blocker">' + __('What is holding this job up?') + '</label>',
-				'  <textarea id="jb-p-blocker" rows="2" placeholder="' + __('e.g. Waiting for the client to confirm the material') + '">' + jb_esc(j.blocker || '') + '</textarea>',
-				'  <div class="jb-p-row-actions">',
-				'    <button class="btn btn-xs btn-default" data-p-action="blocker-cancel">' + __('Cancel') + '</button>',
-				'    <button class="btn btn-xs btn-danger" data-p-action="blocker-save">' + __('Mark Held Up') + '</button>',
-				'  </div>',
-				'</div>'
-			].join('\n');
-		}
-		if (j.blocker) {
-			return [
-				'<div class="jb-block jb-p-block"><i class="ph ph-warning-octagon"></i><span class="jb-p-grow">' + jb_esc(j.blocker) + '</span>',
+				'<div class="jb-block jb-p-block"><i class="ph ph-warning-octagon"></i><span class="jb-p-grow">' +
+					(head ? '<b>' + head + '</b>' + (j.blocker ? '<br>' : '') : '') + jb_esc(j.blocker || '') + '</span>',
 				j.can_write ? '<button class="jb-p-link" data-p-action="blocker-edit">' + __('Edit') + '</button>' +
 					'<button class="btn btn-xs btn-default" data-p-action="blocker-clear"><i class="ph ph-check"></i> ' + __('Sorted') + '</button>' : '',
 				'</div>'
 			].join('');
 		}
 		return j.can_write ? '<button class="jb-p-held" data-p-action="blocker-edit"><i class="ph ph-hand-palm"></i> ' + __('Mark as held up') + '</button>' : '';
+	}
+
+	render_next() {
+		var j = this.job;
+		if (!j.next_action && !j.can_write) return '';
+		var edit = j.can_write ? '<button class="jb-p-link" data-p-action="next-edit">' + (j.next_action ? __('Edit') : __('Add')) + '</button>' : '';
+		return '<div class="jb-nextact jb-p-nextact"><i class="ph ph-arrow-bend-down-right"></i><span class="jb-p-grow">' +
+			(j.next_action ? '<b>' + __('Next') + ':</b> ' + jb_esc(j.next_action) : '<span class="jb-p-muted">' + __('No next action set') + '</span>') +
+			'</span>' + edit + '</div>';
 	}
 
 	section(icon, title, summary, action, body) {
@@ -1416,7 +1428,7 @@ class JobPanel {
 		if (count('Ordered')) parts.push(jb_tag(__('{0} on order', [count('Ordered')]), ''));
 		if (j.materials.length && !parts.length) parts.push(jb_tag(__('All in'), 'good'));
 		var action = j.can_write
-			? '<button class="jb-p-link" data-p-action="po-request"><i class="ph ph-shopping-cart"></i> ' + __('Raise PO request') + '</button>' : '';
+			? '<button class="jb-p-link" data-p-action="material-add"><i class="ph ph-plus"></i> ' + __('Add item') + '</button>' : '';
 		var rows = j.materials.map(function(m) {
 			var chip = jb_tag(jb_esc(__(m.status)), JB_MATERIAL_TONE[m.status] || '');
 			// Lines on a purchase order follow it; the rest are ticked off by hand.
@@ -1424,6 +1436,13 @@ class JobPanel {
 				var next = JB_MATERIAL_NEXT[m.status] || 'To Order';
 				chip = '<button class="jb-p-chipbtn" data-p-action="material" data-row="' + jb_esc(m.name) + '" data-status="' + jb_esc(next) +
 					'" title="' + jb_esc(__('Tap to mark {0}', [__(next)])) + '">' + chip + '</button>';
+			}
+			// Long-lead: order it as soon as engineering knows it is needed. Tap to flag or unflag.
+			var lead = m.long_lead ? jb_tag('<i class="ph ph-hourglass-medium"></i>' + __('Long-lead'), 'bad') : '';
+			if (j.can_write) {
+				lead = '<button class="jb-p-chipbtn' + (m.long_lead ? '' : ' jb-p-faint') + '" data-p-action="long-lead" data-row="' + jb_esc(m.name) +
+					'" data-flag="' + (m.long_lead ? 0 : 1) + '" title="' + jb_esc(m.long_lead ? __('Tap if it is not long-lead') : __('Tap to flag as long-lead')) + '">' +
+					(lead || jb_tag('<i class="ph ph-hourglass-medium"></i>', '')) + '</button>';
 			}
 			var sub = [];
 			if (m.purchase_order) {
@@ -1436,125 +1455,34 @@ class JobPanel {
 				'  <span class="jb-p-qty">' + jb_esc(parseFloat(m.qty || 0)) + '&times;</span>',
 				'  <div class="jb-p-grow"><div class="jb-p-item-title">' + jb_esc(m.description || m.item || '') + '</div>' +
 					(sub.length ? '<div class="jb-p-item-sub">' + sub.join(' &middot; ') + '</div>' : '') + '</div>',
-				'  <div class="jb-p-item-side">' + chip + '</div>',
+				'  <div class="jb-p-item-side">' + lead + chip + '</div>',
 				'</div>'
 			].join('\n');
 		}).join('\n');
-		var empty = '<div class="jb-p-empty">' + __('Nothing listed yet. Raise a PO request to order what the job needs; the items are added here.') + '</div>';
+		var empty = '<div class="jb-p-empty">' + __('Only the key and long-lead items. Add one and tick it off as it is ordered and arrives.') + '</div>';
 		return this.section('package', __('Materials'), parts.join(''), action, rows || empty);
 	}
 
-	// What is at the job's own site store, and the three ways goods move for a job.
-	render_stock() {
+	// QC / FAT is one tick: the workshop runs its own checks; the board only needs to know it passed.
+	render_qc() {
 		var j = this.job;
-		if (!j.site_store) return '';
-		var money = function(v) { return typeof format_currency === 'function' ? format_currency(v, null, 0) : Math.round(v); };
-		var actions = j.can_write ? [
-			'<button class="jb-p-link" data-p-action="goods-in"><i class="ph ph-truck"></i> ' + __('Goods to site') + '</button>',
-			j.on_site.length ? '<button class="jb-p-link" data-p-action="goods-used"><i class="ph ph-wrench"></i> ' + __('Used on site') + '</button>' : '',
-			j.on_site.length ? '<button class="jb-p-link" data-p-action="goods-back"><i class="ph ph-arrow-u-up-left"></i> ' + __('Return') + '</button>' : ''
-		].join('') : '';
-		var rows = j.on_site.map(function(b) {
-			return [
-				'<div class="jb-p-item">',
-				'  <span class="jb-p-qty">' + jb_esc(parseFloat(b.qty)) + '&times;</span>',
-				'  <div class="jb-p-grow"><div class="jb-p-item-title">' + jb_esc(b.item_name) + '</div><div class="jb-p-item-sub">' + jb_esc(b.item) + '</div></div>',
-				'  <div class="jb-p-item-side"><span class="jb-p-muted">' + jb_esc(money(b.value)) + '</span></div>',
-				'</div>'
-			].join('\n');
-		}).join('\n');
-		var body = (rows || '<div class="jb-p-empty">' + __('Nothing at site yet.') + '</div>') +
-			'<div class="jb-p-item-sub jb-p-stock-foot">' + __('Site store: {0}', [jb_esc(j.site_store)]) +
-			(j.used_value ? ' &middot; ' + __('used on this job so far: {0}', [jb_esc(money(j.used_value))]) : '') + '</div>';
-		return this.section('warehouse', __('Stock on site'), '', '<span class="jb-p-actions">' + actions + '</span>', body);
+		var checks = j.checks || [];
+		var passed = checks.length && checks.every(function(c) { return c.done; });
+		var here = j.stage_order[j.stage] || 0;
+		var qc_stage = this.board.data ? this.board.data.stages.filter(function(s) { return s.gate === 'QC checks complete'; })[0] : null;
+		// Before the QC stage there is nothing to show yet.
+		if (!passed && (!qc_stage || here < qc_stage.sequence)) return '';
+		var last = checks[checks.length - 1] || {};
+		var body = passed
+			? '<div class="jb-p-item jb-p-check jb-p-done"><i class="ph ph-check-circle jb-p-tick"></i><div class="jb-p-grow"><div class="jb-p-item-title">' +
+				__('QC / FAT passed') + '</div><div class="jb-p-item-sub">' + jb_esc(this.user_name(last.done_by)) + ' &middot; ' + jb_esc(jb_when(last.done_on)) + '</div></div></div>'
+			: (j.can_write
+				? '<button class="btn btn-sm btn-success" data-p-action="qc-pass"><i class="ph ph-seal-check"></i> ' + __('QC / FAT passed') + '</button>'
+				: '<div class="jb-p-empty">' + __('Not passed yet.') + '</div>');
+		return this.section('check-square', __('QC / FAT'), passed ? jb_tag(__('Passed'), 'good') : '', '', body);
 	}
 
-	// Goods to site, or back: one dialog, from any store to any store, for this job.
-	open_goods(direction) {
-		var me = this;
-		var j = this.job;
-		var to_site = direction === 'in';
-		var lines = to_site
-			? j.materials.filter(function(m) { return m.item && (m.status === 'Received' || m.status === 'In Stock'); })
-				.map(function(m) { return { item: m.item, qty: parseFloat(m.qty || 1) }; })
-			: j.on_site.map(function(b) { return { item: b.item, qty: parseFloat(b.qty) }; });
-		var store_query = function() { return { filters: { company: j.company, is_group: 0, disabled: 0 } }; };
-		var dialog = new frappe.ui.Dialog({
-			title: to_site ? __('Goods to site for {0}', [j.name]) : __('Return goods from {0}', [j.name]),
-			size: 'large',
-			fields: [
-				{ fieldname: 'from_warehouse', fieldtype: 'Link', options: 'Warehouse', label: __('From'), reqd: 1,
-				  default: to_site ? j.main_store : j.site_store, get_query: store_query },
-				{ fieldtype: 'Column Break' },
-				{ fieldname: 'to_warehouse', fieldtype: 'Link', options: 'Warehouse', label: __('To'), reqd: 1,
-				  default: to_site ? j.site_store : j.main_store, get_query: store_query },
-				{ fieldtype: 'Section Break' },
-				{
-					fieldname: 'lines', fieldtype: 'Table', label: __('Items'), in_place_edit: true, data: lines,
-					description: to_site ? __('Starts with the job\'s received and in-stock materials. Change or add rows as needed.') : '',
-					fields: [
-						{ fieldname: 'item', fieldtype: 'Link', options: 'Item', label: __('Item'), in_list_view: 1, columns: 7, reqd: 1 },
-						{ fieldname: 'qty', fieldtype: 'Float', label: __('Qty'), in_list_view: 1, columns: 3, reqd: 1, default: 1 }
-					]
-				},
-				{ fieldname: 'note', fieldtype: 'Data', label: __('Note (optional)') }
-			],
-			primary_action_label: to_site ? __('Send to Site') : __('Return Goods'),
-			primary_action: function(v) {
-				dialog.hide();
-				me.stock_call('move_goods', { from_warehouse: v.from_warehouse, to_warehouse: v.to_warehouse, lines: v.lines || [], note: v.note },
-					to_site ? __('Goods sent to site') : __('Goods returned'));
-			}
-		});
-		dialog.show();
-		jb_mic(dialog, 'note');
-	}
-
-	open_used() {
-		var me = this;
-		var j = this.job;
-		var dialog = new frappe.ui.Dialog({
-			title: __('Used on site for {0}', [j.name]),
-			size: 'large',
-			fields: [
-				{
-					fieldname: 'lines', fieldtype: 'Table', label: __('Used'), in_place_edit: true,
-					data: j.on_site.map(function(b) { return { item: b.item, on_site: parseFloat(b.qty), qty: 0 }; }),
-					description: __('Enter what was used. Lines left at 0 stay on site. Used goods are costed to the job.'),
-					fields: [
-						{ fieldname: 'item', fieldtype: 'Link', options: 'Item', label: __('Item'), in_list_view: 1, columns: 5, reqd: 1 },
-						{ fieldname: 'on_site', fieldtype: 'Float', label: __('On site'), in_list_view: 1, columns: 2, read_only: 1 },
-						{ fieldname: 'qty', fieldtype: 'Float', label: __('Used'), in_list_view: 1, columns: 3 }
-					]
-				},
-				{ fieldname: 'note', fieldtype: 'Data', label: __('Note (optional)') }
-			],
-			primary_action_label: __('Record Use'),
-			primary_action: function(v) {
-				dialog.hide();
-				me.stock_call('use_on_site', { lines: v.lines || [], note: v.note }, __('Use recorded'));
-			}
-		});
-		dialog.show();
-		jb_mic(dialog, 'note');
-	}
-
-	stock_call(method, args, done) {
-		var me = this;
-		var name = this.name;
-		frappe.call({
-			method: 'nest_projects.panel.' + method,
-			args: Object.assign({ project: name }, args),
-			freeze: true,
-			freeze_message: __('Posting the stock movement...'),
-			callback: function(r) {
-				frappe.show_alert({ message: done, indicator: 'green' });
-				if (me.name === name && r.message) me.show(r.message);
-			}
-		});
-	}
-
-	// A tick-list: QC / FAT checks, or the Customer Ready checks from the Order Face.
+	// A tick-list: the Customer Ready checks from the Order Face.
 	render_checks(checks, table, icon, title) {
 		var j = this.job;
 		var me = this;
@@ -1606,7 +1534,7 @@ class JobPanel {
 		var me = this;
 		if (!j.history.length) return '';
 		var rows = j.history.map(function(h) {
-			var what = h.from_stage === h.to_stage
+			var what = h.event ? jb_esc(h.event) : h.from_stage === h.to_stage
 				? __('Reassigned in {0}', [jb_esc(h.to_stage)])
 				: (h.from_stage ? jb_esc(h.from_stage) + ' <i class="ph ph-arrow-right"></i> ' + jb_esc(h.to_stage) : __('Opened in {0}', [jb_esc(h.to_stage)]));
 			var who = [];
@@ -1638,66 +1566,83 @@ class JobPanel {
 
 	// ---- Actions ----------------------------------------------------------
 
-	// A PO request starts from the job's To Order lines; anything else is added as a row
-	// and lands on the job's materials too, so nobody has to keep the list up front.
-	raise_po_request() {
+	// Held up: why (a short list), who it is waiting on, and the details in their own words.
+	edit_hold() {
 		var me = this;
 		var j = this.job;
-		var lines = j.materials.filter(function(m) { return m.status === 'To Order' && !m.purchase_order; }).map(function(m) {
-			return { row: m.name, item: m.item || '', description: m.description || '', qty: parseFloat(m.qty || 1) };
-		});
 		var dialog = new frappe.ui.Dialog({
-			title: __('PO request for {0}', [j.name]),
-			size: 'large',
+			title: __('What is holding up {0}?', [j.name]),
 			fields: [
-				{ fieldname: 'supplier', fieldtype: 'Link', options: 'Supplier', label: __('Supplier'), reqd: 1 },
-				{ fieldtype: 'Column Break' },
-				{ fieldname: 'schedule_date', fieldtype: 'Date', label: __('Required by'), reqd: 1,
-				  default: moment(this.board.data.today).add(14, 'days').format('YYYY-MM-DD') },
-				{ fieldname: 'warehouse', fieldtype: 'Link', options: 'Warehouse', label: __('Deliver to'), reqd: 1,
-				  default: j.site_store || j.main_store || '',
-				  description: __('Where the goods will be received. The job\'s site store unless they go elsewhere.'),
-				  get_query: function() { return { filters: { company: j.company, is_group: 0, disabled: 0 } }; } },
-				{ fieldtype: 'Section Break' },
-				{
-					fieldname: 'lines', fieldtype: 'Table', label: __('Items'), in_place_edit: true, data: lines,
-					description: lines.length
-						? __('These are the job\'s To Order lines. Remove any you are not ordering now, and add a row for anything else.')
-						: __('Add a row for each item. They are added to the job\'s materials.'),
-					fields: [
-						{ fieldname: 'item', fieldtype: 'Link', options: 'Item', label: __('Item'), in_list_view: 1, columns: 4, reqd: 1 },
-						{ fieldname: 'description', fieldtype: 'Data', label: __('Description'), in_list_view: 1, columns: 4 },
-						{ fieldname: 'qty', fieldtype: 'Float', label: __('Qty'), in_list_view: 1, columns: 2, reqd: 1, default: 1 },
-						{ fieldname: 'row', fieldtype: 'Data', hidden: 1 }
-					]
-				}
+				{ fieldname: 'reason', fieldtype: 'Select', label: __('Held up'), reqd: 1, options: [''].concat(JB_HOLD_REASONS),
+				  default: j.hold_reason || '' },
+				{ fieldname: 'waiting_on', fieldtype: 'Link', options: 'User', label: __('Waiting on'), default: j.waiting_on || '',
+				  description: __('Who has to act to get it moving. Leave empty if it is the client.'),
+				  get_query: function() { return { query: 'nest_projects.api.stage_users', filters: {} }; } },
+				{ fieldname: 'details', fieldtype: 'Small Text', label: __('Details'), default: j.blocker || '' }
 			],
-			primary_action_label: __('Create PO Request'),
+			primary_action_label: __('Mark Held Up'),
 			primary_action: function(v) {
-				var picked = (v.lines || []).filter(function(l) { return l.item && parseFloat(l.qty) > 0; });
-				if (!picked.length) {
-					frappe.msgprint(__('Add at least one item with a quantity.'));
-					return;
-				}
 				dialog.hide();
-				frappe.call({
-					method: 'nest_projects.panel.raise_po_request',
-					args: { project: j.name, supplier: v.supplier, schedule_date: v.schedule_date, warehouse: v.warehouse, lines: picked },
-					freeze: true,
-					freeze_message: __('Creating the PO request...'),
-					callback: function(r) {
-						if (!r.message) return;
-						var po = r.message.created_po;
-						frappe.show_alert({
-							message: __('PO request {0} created for {1}', [
-								'<a href="' + frappe.utils.get_form_link('Purchase Order', po) + '" target="_blank" rel="noopener">' + jb_esc(po) + '</a>', jb_esc(j.name)
-							]),
-							indicator: 'green'
-						}, 8);
-						if (me.name === j.name) me.show(r.message);
-						me.board.refresh();
-					}
-				});
+				me.act('set_blocker', { reason: v.reason, waiting_on: v.waiting_on || '', text: v.details || '' });
+			}
+		});
+		dialog.show();
+		jb_mic(dialog, 'details');
+	}
+
+	edit_next() {
+		var me = this;
+		var dialog = new frappe.ui.Dialog({
+			title: __('Next action on {0}', [this.job.name]),
+			fields: [{ fieldname: 'text', fieldtype: 'Small Text', label: __('What has to happen next?'), default: this.job.next_action || '' }],
+			primary_action_label: __('Save'),
+			primary_action: function(v) {
+				dialog.hide();
+				me.act('set_next_action', { text: v.text || '' });
+			}
+		});
+		dialog.show();
+		jb_mic(dialog, 'text');
+	}
+
+	// Every change to the due date or priority is recorded with a reason, whoever makes it.
+	edit_due() {
+		var me = this;
+		var j = this.job;
+		var dialog = new frappe.ui.Dialog({
+			title: __('Change due date or priority on {0}', [j.name]),
+			fields: [
+				{ fieldname: 'due', fieldtype: 'Date', label: __('Due'), default: j.due || '' },
+				{ fieldtype: 'Column Break' },
+				{ fieldname: 'priority', fieldtype: 'Select', label: __('Priority'), options: ['Low', 'Medium', 'High'], default: j.priority || 'Medium' },
+				{ fieldtype: 'Section Break' },
+				{ fieldname: 'reason', fieldtype: 'Data', label: __('Why?'), reqd: 1,
+				  description: __('Recorded in the job history with your name.') }
+			],
+			primary_action_label: __('Save'),
+			primary_action: function(v) {
+				dialog.hide();
+				me.act('set_due', { due: v.due || '', priority: v.priority, reason: v.reason });
+			}
+		});
+		dialog.show();
+		jb_mic(dialog, 'reason');
+	}
+
+	add_material() {
+		var me = this;
+		var dialog = new frappe.ui.Dialog({
+			title: __('Add an item to {0}', [this.job.name]),
+			fields: [
+				{ fieldname: 'description', fieldtype: 'Data', label: __('What is it?'), reqd: 1 },
+				{ fieldname: 'qty', fieldtype: 'Float', label: __('Qty'), default: 1 },
+				{ fieldname: 'long_lead', fieldtype: 'Check', label: __('Long-lead: order it now'),
+				  description: __('Everyone on the job is told, so it is ordered before the drawing is signed off.') }
+			],
+			primary_action_label: __('Add'),
+			primary_action: function(v) {
+				dialog.hide();
+				me.act('add_material', { description: v.description, qty: v.qty || 1, long_lead: v.long_lead ? 1 : 0 });
 			}
 		});
 		dialog.show();
@@ -1769,36 +1714,28 @@ class JobPanel {
 			if (action === 'close') {
 				me.close();
 			} else if (action === 'blocker-edit') {
-				me.editing_blocker = true;
-				me.render();
-				$p.find('#jb-p-blocker').trigger('focus');
-			} else if (action === 'blocker-cancel') {
-				me.editing_blocker = false;
-				me.render();
-			} else if (action === 'blocker-save') {
-				var text = ($p.find('#jb-p-blocker').val() || '').trim();
-				if (!text) {
-					frappe.show_alert({ message: __('Say what is holding it up.'), indicator: 'orange' });
-					return;
-				}
-				me.editing_blocker = false;
-				me.act('set_blocker', { text: text });
+				me.edit_hold();
 			} else if (action === 'blocker-clear') {
 				me.act('set_blocker', { text: '' });
+			} else if (action === 'next-edit') {
+				me.edit_next();
+			} else if (action === 'due-edit') {
+				me.edit_due();
 			} else if (action === 'drawing-status') {
 				me.act('set_drawing_status', { row: row, status: $b.attr('data-status') });
-			} else if (action === 'goods-in') {
-				me.open_goods('in');
-			} else if (action === 'goods-back') {
-				me.open_goods('back');
-			} else if (action === 'goods-used') {
-				me.open_used();
-			} else if (action === 'po-request') {
-				me.raise_po_request();
 			} else if (action === 'drawing-add') {
 				me.add_drawing();
 			} else if (action === 'material') {
 				me.act('set_material_status', { row: row, status: $b.attr('data-status') });
+				// The alert goes to everyone else on the job, so say so to the person tapping.
+				if ($b.attr('data-status') === 'Received') frappe.show_alert({ message: __('Marked received. Everyone on the job has been told.'), indicator: 'green' });
+			} else if (action === 'material-add') {
+				me.add_material();
+			} else if (action === 'long-lead') {
+				me.act('set_long_lead', { row: row, long_lead: $b.attr('data-flag') });
+				if ($b.attr('data-flag') === '1') frappe.show_alert({ message: __('Flagged long-lead. Everyone on the job has been told.'), indicator: 'orange' });
+			} else if (action === 'qc-pass') {
+				me.act('pass_qc');
 			} else if (action === 'check') {
 				me.act('set_check', { row: row, done: $b.attr('data-done'), table: $b.attr('data-table') });
 			} else if (action === 'invoiced') {

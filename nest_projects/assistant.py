@@ -98,7 +98,8 @@ def job_facts(doc, stages):
 	stage = stages[here] if here >= 0 else None
 	next_stage = stages[here + 1] if stage and not stage.is_closed and here < len(stages) - 1 else None
 	since = getdate(doc.job_stage_since) if doc.job_stage_since else None
-	last = doc.job_stage_log[-1] if doc.job_stage_log else None
+	# The last handover; due date and priority changes (rows with an event) are not moves.
+	last = next((row for row in reversed(doc.job_stage_log) if not row.get("event")), None)
 
 	facts = {
 		"job": doc.name,
@@ -110,7 +111,8 @@ def job_facts(doc, stages):
 		"with": user_name(doc.job_owner) or "nobody yet",
 		"in this stage since": f"{since} ({date_diff(today(), since)} days)" if since else None,
 		"started": "working on it" if doc.job_work_status == "In Progress" else "not started (queued)",
-		"held up by": doc.job_blocker,
+		"held up": ", ".join(filter(None, [doc.job_hold_reason, user_name(doc.job_waiting_on) and f"waiting on {user_name(doc.job_waiting_on)}", doc.job_blocker])) or None,
+		"next action": doc.job_next_action,
 		"next stage": next_stage.name if next_stage else None,
 		"can't move on yet because": gate_failure(doc, stage.gate) if stage and stage.gate and next_stage else None,
 		"due": str(doc.expected_end_date) if doc.expected_end_date else None,

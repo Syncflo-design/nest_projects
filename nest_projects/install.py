@@ -16,6 +16,9 @@ DEFAULT_STAGES = [
 	{"stage_name": "Invoiced", "color": "Gray", "is_closed": 1},
 ]
 
+# The speed bumps the board flags; "Other" says it in the details.
+HOLD_REASONS = ["GA approval", "Info from client", "Materials", "Capacity", "Priority clash", "Other"]
+
 # Project already carries customer, priority and expected_end_date (the due
 # date); these are only what it lacks.
 CUSTOM_FIELDS = {
@@ -55,10 +58,17 @@ CUSTOM_FIELDS = {
 			"description": "In Progress = what they are working on now. Queued = waiting its turn.",
 		},
 		{
+			"fieldname": "job_next_action",
+			"label": "Next Action",
+			"fieldtype": "Small Text",
+			"insert_after": "job_work_status",
+			"description": "The one thing that has to happen next on this job.",
+		},
+		{
 			"fieldname": "job_stage_since",
 			"label": "In Stage Since",
 			"fieldtype": "Datetime",
-			"insert_after": "job_work_status",
+			"insert_after": "job_next_action",
 			"read_only": 1,
 			"no_copy": 1,
 		},
@@ -92,14 +102,30 @@ CUSTOM_FIELDS = {
 			"fieldtype": "Link",
 			"options": "Warehouse",
 			"insert_after": "job_site",
-			"description": "The job's own store at site. Created automatically when the job gets a stage.",
+			"hidden": 1,
+			"description": "The job's own store at site, from earlier versions. No longer created.",
+		},
+		{
+			"fieldname": "job_hold_reason",
+			"label": "Held Up",
+			"fieldtype": "Select",
+			"options": "\n" + "\n".join(HOLD_REASONS),
+			"insert_after": "job_warehouse",
+			"description": "Why the job can't move. Leave empty when nothing is holding it up.",
+		},
+		{
+			"fieldname": "job_waiting_on",
+			"label": "Waiting On",
+			"fieldtype": "Link",
+			"options": "User",
+			"insert_after": "job_hold_reason",
+			"description": "Who has to act to get it moving again.",
 		},
 		{
 			"fieldname": "job_blocker",
-			"label": "Held Up By",
+			"label": "Held Up Details",
 			"fieldtype": "Small Text",
-			"insert_after": "job_warehouse",
-			"description": "What is stopping this job moving. Leave empty when nothing is.",
+			"insert_after": "job_waiting_on",
 		},
 		{
 			"fieldname": "job_drawings_section",

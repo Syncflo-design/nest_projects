@@ -33,8 +33,8 @@ nest_assistant_workload = ["nest_projects.assistant.workload"]
 doc_events = {
 	"Project": {
 		"validate": "nest_projects.jobs.validate_project",
-		# Alert the new person; give a job on the board its own site store.
-		"on_update": ["nest_projects.jobs.notify_owner", "nest_projects.stock.ensure_job_store"],
+		# Alert the new person, and the job's people when a material arrives or is long-lead.
+		"on_update": ["nest_projects.jobs.notify_owner", "nest_projects.jobs.send_material_alerts"],
 	},
 	# The job's material lines follow the purchase order raised for them.
 	"Purchase Order": {

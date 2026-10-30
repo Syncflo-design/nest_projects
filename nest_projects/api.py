@@ -17,6 +17,9 @@ JOB_FIELDS = [
 	"job_quote_ref",
 	"job_customer_po",
 	"job_site",
+	"job_next_action",
+	"job_hold_reason",
+	"job_waiting_on",
 	"job_blocker",
 	"job_drawing_not_required",
 ]
@@ -40,6 +43,7 @@ def get_board():
 		attach_summaries(jobs, stages)
 
 	people = {j.job_owner for j in jobs if j.job_owner} | {s.default_owner for s in stages if s.default_owner}
+	people |= {j.job_waiting_on for j in jobs if j.job_waiting_on}
 	users = {}
 	if people:
 		for u in frappe.get_all(
@@ -81,8 +85,11 @@ def move_job(project, to_stage, owner=None, note=None):
 	doc.job_owner = owner or None
 	doc.job_work_status = "Queued"
 	if forward:
-		# Whatever held it up in the old stage is behind it now.
+		# Whatever held it up in the old stage, and what was next there, is behind it now.
 		doc.job_blocker = None
+		doc.job_hold_reason = None
+		doc.job_waiting_on = None
+		doc.job_next_action = None
 	doc.save()
 
 
@@ -140,14 +147,12 @@ def stage_users(doctype, txt, searchfield, start, page_len, filters):
 
 
 def attach_summaries(jobs, stages):
-	"""Adds the small facts a card shows: drawing, materials, QC and what's ready to invoice."""
+	"""Adds the small facts a card shows: drawing, materials and checks. Payment milestones stay in the job panel."""
 	names = [j.name for j in jobs]
-	sequence = {s.name: s.sequence for s in stages}
 	drawings = child_rows("Job Drawing", names, ["drawing_no", "revision", "status"])
-	materials = child_rows("Job Material", names, ["status"])
+	materials = child_rows("Job Material", names, ["status", "long_lead"])
 	checks = child_rows("Job QC Check", names, ["done"])
 	ready_checks = child_rows("Job Ready Check", names, ["done"])
-	milestones = child_rows("Job Milestone", names, ["label", "percent", "due_at_stage", "invoiced"])
 
 	for job in jobs:
 		# The card shows the main drawing: the first one still live (older revisions are superseded).
@@ -169,21 +174,13 @@ def attach_summaries(jobs, stages):
 			"total": len(mats),
 			"to_order": sum(1 for m in mats if m.status == "To Order"),
 			"on_order": sum(1 for m in mats if m.status in ("Requested", "Ordered")),
+			"long_lead": sum(1 for m in mats if m.long_lead and m.status == "To Order"),
 		}
 
 		qc = checks.get(job.name, [])
 		job.qc = {"total": len(qc), "done": sum(1 for c in qc if c.done)}
 		rc = ready_checks.get(job.name, [])
 		job.ready = {"total": len(rc), "done": sum(1 for c in rc if c.done)}
-
-		# A milestone is ready to invoice once the job has left the stage it is tied to.
-		here = sequence.get(job.job_stage, 0)
-		ready = [
-			m
-			for m in milestones.get(job.name, [])
-			if not m.invoiced and m.due_at_stage and sequence.get(m.due_at_stage, 0) < here
-		]
-		job.to_invoice = {"percent": sum(m.percent or 0 for m in ready), "labels": [m.label for m in ready]}
 
 
 def child_rows(doctype, names, fields):

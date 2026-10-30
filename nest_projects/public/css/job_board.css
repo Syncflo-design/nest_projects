@@ -201,6 +201,9 @@
   display: flex; gap: 5px; align-items: flex-start; line-height: 1.35;
 }
 .jb-block .ph { margin-top: 1px; }
+.jb-block b { font-weight: 750; }
+.jb-nextact { margin-top: 6px; font-size: 12px; display: flex; gap: 5px; align-items: flex-start; line-height: 1.35; }
+.jb-nextact .ph { margin-top: 1px; color: var(--jb-primary); }
 .jb-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
 .jb-tag {
   display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 600;
@@ -353,23 +356,15 @@
   display: flex; align-items: center; justify-content: center; gap: 6px;
 }
 .jb-p-held:hover { border-color: var(--jb-bad); color: var(--jb-bad); }
-.jb-p-blockedit {
-  margin-bottom: 14px; padding: 10px; border-radius: 9px;
-  border: 1px solid color-mix(in srgb, var(--jb-bad) 35%, transparent); background: color-mix(in srgb, var(--jb-bad) 5%, transparent);
-}
-.jb-p-blockedit textarea {
-  width: 100%; border: 1px solid var(--jb-border); border-radius: 7px; padding: 7px 9px; font-size: 13px;
-  background: var(--jb-card); color: var(--jb-text); resize: vertical;
-}
-.jb-p-row-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+.jb-p-nextact { margin: 0 0 14px; padding: 9px 10px; font-size: 13px; align-items: center; gap: 8px; border-radius: 9px; border: 1px solid var(--jb-border); }
+.jb-p-faint { opacity: .4; }
+.jb-p-faint:hover { opacity: 1; }
 
 .jb-p-sec { border: 1px solid var(--jb-border); border-radius: 11px; padding: 10px 12px 6px; margin-bottom: 12px; }
 .jb-p-sec-head { display: flex; align-items: center; gap: 7px; font-weight: 700; font-size: 13.5px; margin-bottom: 4px; }
 .jb-p-sec-head > .ph { color: var(--jb-stage, var(--jb-primary)); font-size: 17px; }
 .jb-p-sum { display: inline-flex; gap: 4px; font-weight: 500; }
 .jb-p-empty { color: var(--jb-light); font-size: 12.5px; padding: 6px 0 8px; }
-.jb-p-actions { display: inline-flex; flex-wrap: wrap; gap: 2px 6px; justify-content: flex-end; }
-.jb-p-stock-foot { padding: 6px 0 8px; border-top: 1px solid var(--jb-subtle); }
 
 .jb-p-item {
   display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--jb-subtle);
@@ -515,3 +510,8 @@ a.jb-p-file:hover { background: var(--jb-primary); color: #fff; text-decoration:
   .jb-col-head { gap: 6px; padding: 10px 10px 8px; }
   .jb-col-name { white-space: normal; line-height: 1.2; font-size: 13px; }
 }
+
+/* Wall screen (/desk/job-board?tv=1): the board alone and larger, for a TV in the office. Kept last so it wins. */
+.jb-root.jb-tv .jb-toolbar, .jb-root.jb-tv .jb-hint-desk, .jb-root.jb-tv .jb-hint-phone { display: none; }
+.jb-root.jb-tv .jb-app { zoom: 1.15; }
+.jb-root.jb-tv .jb-chips { display: flex; }

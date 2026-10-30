@@ -7,9 +7,8 @@ on the form) and returns the refreshed job, so the panel redraws in one trip.
 import frappe
 from frappe import _
 
-from nest_projects import stock
+from nest_projects.install import HOLD_REASONS
 from nest_projects.jobs import CHECK_TABLES, gate_failure
-from nest_projects.purchasing import create_po_request, default_warehouse
 
 DRAWING_STATUSES = ("Draft", "Sent for Approval", "Approved", "Superseded")
 MATERIAL_STATUSES = ("In Stock", "To Order", "Ordered", "Received")
@@ -23,9 +22,35 @@ def get_job(project):
 
 
 @frappe.whitelist()
-def set_blocker(project, text=None):
+def set_blocker(project, text=None, reason=None, waiting_on=None):
+	"""Held up: why, who it is waiting on, and any details. All three empty clears it."""
+	if reason and reason not in HOLD_REASONS:
+		frappe.throw(_("Unknown reason {0}.").format(reason))
 	doc = writable(project)
+	doc.job_hold_reason = reason or None
+	doc.job_waiting_on = waiting_on or None
 	doc.job_blocker = (text or "").strip() or None
+	return save(doc)
+
+
+@frappe.whitelist()
+def set_next_action(project, text=None):
+	doc = writable(project)
+	doc.job_next_action = (text or "").strip() or None
+	return save(doc)
+
+
+@frappe.whitelist()
+def set_due(project, due=None, priority=None, reason=None):
+	"""Due date and priority. The history records who changed them, old to new, and why."""
+	reason = (reason or "").strip()
+	if not reason:
+		frappe.throw(_("Say why the due date or priority is changing."))
+	doc = writable(project)
+	doc.expected_end_date = due or None
+	if priority:
+		doc.priority = priority
+	doc.flags.job_change_reason = reason
 	return save(doc)
 
 
@@ -69,33 +94,30 @@ def set_material_status(project, row, status):
 
 
 @frappe.whitelist()
-def raise_po_request(project, supplier, lines, schedule_date=None, warehouse=None):
-	"""Draft PO from the job: its To Order lines, plus anything added in the dialog."""
-	lines = frappe.parse_json(lines) if isinstance(lines, str) else (lines or [])
+def set_long_lead(project, row, long_lead):
 	doc = writable(project)
-	po = create_po_request(doc, supplier, lines, schedule_date, warehouse)
-	doc.save()
-	payload = job_payload(doc)
-	payload["created_po"] = po
-	return payload
+	child(doc, "job_materials", row).long_lead = 1 if frappe.utils.cint(long_lead) else 0
+	return save(doc)
 
 
 @frappe.whitelist()
-def move_goods(project, from_warehouse, to_warehouse, lines, note=None):
-	"""Goods from any store to the job's site, or back."""
-	lines = frappe.parse_json(lines) if isinstance(lines, str) else (lines or [])
+def add_material(project, description, qty=1, item=None, long_lead=0):
+	"""A key or long-lead item the job needs; ticked off by hand as it is ordered and arrives."""
+	description = (description or "").strip()
+	if not description and not item:
+		frappe.throw(_("Say what the item is."))
 	doc = writable(project)
-	stock.move_goods(doc, from_warehouse, to_warehouse, lines, note)
-	return job_payload(frappe.get_doc("Project", project))
-
-
-@frappe.whitelist()
-def use_on_site(project, lines, note=None):
-	"""What was used at site; costs the job."""
-	lines = frappe.parse_json(lines) if isinstance(lines, str) else (lines or [])
-	doc = writable(project)
-	stock.use_on_site(doc, lines, note)
-	return job_payload(frappe.get_doc("Project", project))
+	doc.append(
+		"job_materials",
+		{
+			"item": item or None,
+			"description": description or frappe.db.get_value("Item", item, "item_name"),
+			"qty": frappe.utils.flt(qty) or 1,
+			"status": "To Order",
+			"long_lead": 1 if frappe.utils.cint(long_lead) else 0,
+		},
+	)
+	return save(doc)
 
 
 @frappe.whitelist()
@@ -105,6 +127,17 @@ def set_check(project, row, done, table="job_qc_checks"):
 		frappe.throw(_("Unknown checklist."))
 	doc = writable(project)
 	child(doc, table, row).done = 1 if frappe.utils.cint(done) else 0
+	return save(doc)
+
+
+@frappe.whitelist()
+def pass_qc(project):
+	"""QC / FAT in one tick: every listed check done, or a single "QC / FAT passed" line if none are listed."""
+	doc = writable(project)
+	if not doc.get("job_qc_checks"):
+		doc.append("job_qc_checks", {"check": _("QC / FAT passed")})
+	for row in doc.job_qc_checks:
+		row.done = 1
 	return save(doc)
 
 
@@ -127,7 +160,7 @@ def job_payload(doc):
 	next_stage = stages[here + 1] if 0 <= here < len(stages) - 1 and not current.is_closed else None
 	previous = stages[here - 1] if here > 0 else None
 
-	people = {doc.job_owner} | {r.to_owner for r in doc.job_stage_log} | {r.moved_by for r in doc.job_stage_log}
+	people = {doc.job_owner, doc.job_waiting_on} | {r.to_owner for r in doc.job_stage_log} | {r.moved_by for r in doc.job_stage_log}
 	people |= {r.done_by for r in doc.job_qc_checks} | {r.done_by for r in doc.job_ready_checks}
 	users = {
 		u.name: {"full_name": u.full_name or u.name, "image": u.user_image}
@@ -153,19 +186,17 @@ def job_payload(doc):
 		"stage_since": doc.job_stage_since,
 		"owner": doc.job_owner,
 		"work_status": doc.job_work_status,
+		"next_action": doc.job_next_action,
+		"hold_reason": doc.job_hold_reason,
+		"waiting_on": doc.job_waiting_on,
 		"blocker": doc.job_blocker,
 		"drawing_not_required": doc.job_drawing_not_required,
 		"drawings": rows("job_drawings", ["drawing_no", "revision", "title", "file", "status", "approved_on"]),
-		"materials": rows("job_materials", ["item", "description", "qty", "status", "expected_on", "purchase_order"]),
-		"company": doc.company,
-		"site_store": doc.get("job_warehouse"),
-		"main_store": default_warehouse(doc.company) if doc.company else None,
-		"on_site": stock.on_site(doc),
-		"used_value": doc.get("total_consumed_material_cost") or 0,
+		"materials": rows("job_materials", ["item", "description", "qty", "status", "long_lead", "expected_on", "purchase_order"]),
 		"checks": rows("job_qc_checks", ["check", "done", "done_by", "done_on", "notes"]),
 		"ready_checks": rows("job_ready_checks", ["check", "done", "done_by", "done_on", "notes"]),
 		"milestones": rows("job_milestones", ["label", "percent", "due_at_stage", "invoiced", "invoice_ref"]),
-		"history": list(reversed(rows("job_stage_log", ["from_stage", "to_stage", "to_owner", "moved_by", "moved_on", "note"]))),
+		"history": list(reversed(rows("job_stage_log", ["from_stage", "to_stage", "to_owner", "moved_by", "moved_on", "event", "note"]))),
 		"next_stage": next_stage.name if next_stage else None,
 		"previous_stage": previous.name if previous and not (current and current.is_closed) else None,
 		# Why the job can't move forward yet, if it can't.

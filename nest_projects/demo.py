@@ -297,8 +297,8 @@ def is_loaded():
 def remove_demo():
 	frappe.only_for("System Manager")
 	loaded_on = frappe.db.get_default(LOADED_KEY)
-	# A demo loaded before the company was recorded: the company its jobs are in.
-	company = frappe.db.get_default(COMPANY_KEY) or frappe.db.get_value("Project", {"job_is_demo": 1}, "company")
+	# The company the demo jobs are in now (they can be moved); what was recorded at load otherwise.
+	company = frappe.db.get_value("Project", {"job_is_demo": 1}, "company") or frappe.db.get_default(COMPANY_KEY)
 	# What was raised while testing is only cleared when it can be pinned to the demo's company.
 	since = [["creation", ">=", loaded_on]] if loaded_on and company else None
 

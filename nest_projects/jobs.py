@@ -205,7 +205,12 @@ def gate_failure(doc, gate):
 
 def default_company():
 	company = (
-		frappe.defaults.get_user_default("Company")
+		# A login limited to its own company (each demo profile): that company. get_user_default
+		# returns the site's global default ahead of it.
+		frappe.db.get_value(
+			"User Permission", {"user": frappe.session.user, "allow": "Company", "is_default": 1}, "for_value"
+		)
+		or frappe.defaults.get_user_default("Company")
 		or frappe.db.get_single_value("Global Defaults", "default_company")
 		or frappe.db.get_value("Company", {}, "name")
 	)

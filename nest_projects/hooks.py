@@ -29,6 +29,9 @@ nest_demo_loaders = [
 # What the Nest Assistant can look up about jobs, where it is installed (ignored elsewhere).
 nest_assistant_tools = ["nest_projects.assistant.tools"]
 nest_assistant_workload = ["nest_projects.assistant.workload"]
+# With a job open (on the board or its Project form) the mic takes a note on that job;
+# everywhere else it asks.
+nest_assistant_note_forms = ["Project"]
 
 doc_events = {
 	"Project": {
